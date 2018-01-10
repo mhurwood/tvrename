@@ -24,6 +24,10 @@ using FileInfo = Alphaleonis.Win32.Filesystem.FileInfo;
 using File = Alphaleonis.Win32.Filesystem.File;
 using Path = Alphaleonis.Win32.Filesystem.Path;
 using System.IO;
+using System.Linq;
+using System.Reflection;
+using Microsoft.Win32;
+using System.Security;
 
 // Helpful functions and classes
 
@@ -141,6 +145,33 @@ namespace TVRename
             writer.WriteValue(value);
             writer.WriteEndAttribute();
         }
+
+        public static void WriteInfo(XmlWriter writer, string elemName, string attribute, string attributeVal, string value)
+        {
+            if (!string.IsNullOrEmpty(value))
+            {
+                writer.WriteStartElement(elemName);
+                if (!String.IsNullOrEmpty(attribute) && !String.IsNullOrEmpty(attributeVal))
+                {
+                    writer.WriteAttributeString(attribute, attributeVal);
+                }
+                writer.WriteValue(value);
+                writer.WriteEndElement();
+            }
+        }
+
+        public static void WriteInfo(XmlWriter writer, string elemName, string attribute, string attributeVal)
+        {
+            if (!string.IsNullOrEmpty(attributeVal))
+            {
+                writer.WriteStartElement(elemName);
+                if (!String.IsNullOrEmpty(attribute) && !String.IsNullOrEmpty(attributeVal))
+                {
+                    writer.WriteAttributeString(attribute, attributeVal);
+                }
+                writer.WriteEndElement();
+            }
+        }
     }
 
     public static class FileHelper
@@ -213,10 +244,15 @@ namespace TVRename
             return SimplifyAndCheckFilename(filename, showname,true,true);
         }
 
-    }
+        internal static string TempPath(string v) => Path.GetTempPath() + v;
+
+    
+}
 
     public static class HTTPHelper
     {
+        private static NLog.Logger logger = NLog.LogManager.GetCurrentClassLogger();
+
         public static String HTTPRequest(String method, String url,String json, String contentType,String authToken = "", String lang = "") {
             HttpWebRequest httpWebRequest = (HttpWebRequest)WebRequest.Create(url);
             httpWebRequest.ContentType = contentType;
@@ -229,6 +265,9 @@ namespace TVRename
             {
                 httpWebRequest.Headers.Add("Accept-Language",lang);
             }
+
+            logger.Trace("Obtaining {0}", url);
+
             if (method == "POST") { 
                 using (StreamWriter streamWriter = new StreamWriter(httpWebRequest.GetRequestStream()))
                 {
@@ -244,6 +283,7 @@ namespace TVRename
             {
                 result = streamReader.ReadToEnd();
             }
+            logger.Trace("Returned {0}", result);
             return result;
         }
 
@@ -307,11 +347,245 @@ namespace TVRename
         }
     }
 
+    public static class RegistryHelper {
+        //From https://www.cyotek.com/blog/configuring-the-emulation-mode-of-an-internet-explorer-webbrowser-control THANKS
+        //Needed to ensure webBrowser renders HTML 5 content
+
+        private const string InternetExplorerRootKey = @"Software\Microsoft\Internet Explorer";
+        private const string BrowserEmulationKey = InternetExplorerRootKey + @"\Main\FeatureControl\FEATURE_BROWSER_EMULATION";
+
+        private static NLog.Logger logger = NLog.LogManager.GetCurrentClassLogger();
+
+        private enum BrowserEmulationVersion
+        {
+            Default = 0,
+            Version7 = 7000,
+            Version8 = 8000,
+            Version8Standards = 8888,
+            Version9 = 9000,
+            Version9Standards = 9999,
+            Version10 = 10000,
+            Version10Standards = 10001,
+            Version11 = 11000,
+            Version11Edge = 11001
+        }
+
+        private static int GetInternetExplorerMajorVersion()
+        {
+            int result;
+
+            result = 0;
+
+            try
+            {
+                RegistryKey key;
+
+                key = Registry.LocalMachine.OpenSubKey(InternetExplorerRootKey);
+
+                if (key != null)
+                {
+                    object value;
+
+                    value = key.GetValue("svcVersion", null) ?? key.GetValue("Version", null);
+
+                    if (value != null)
+                    {
+                        string version;
+                        int separator;
+
+                        version = value.ToString();
+                        separator = version.IndexOf('.');
+                        if (separator != -1)
+                        {
+                            int.TryParse(version.Substring(0, separator), out result);
+                        }
+                    }
+                }
+            }
+            catch (SecurityException se)
+            {
+                // The user does not have the permissions required to read from the registry key.
+                logger.Error(se);
+            }
+            catch (UnauthorizedAccessException uae)
+            {
+                // The user does not have the necessary registry rights.
+                logger.Error(uae);
+            }
+
+            return result;
+        }
+        
+        private static BrowserEmulationVersion GetBrowserEmulationVersion()
+        {
+            BrowserEmulationVersion result;
+
+            result = BrowserEmulationVersion.Default;
+
+            try
+            {
+                RegistryKey key;
+
+                key = Registry.CurrentUser.OpenSubKey(BrowserEmulationKey, true);
+                if (key != null)
+                {
+                    string programName;
+                    object value;
+
+                    programName = Path.GetFileName(Environment.GetCommandLineArgs()[0]);
+                    value = key.GetValue(programName, null);
+
+                    if (value != null)
+                    {
+                        result = (BrowserEmulationVersion)Convert.ToInt32(value);
+                    }
+                }
+            }
+            catch (SecurityException se)
+            {
+                // The user does not have the permissions required to read from the registry key.
+                logger.Error(se);
+            }
+            catch (UnauthorizedAccessException uae)
+            {
+                // The user does not have the necessary registry rights.
+                logger.Error(uae);
+            }
+
+            return result;
+        }
+
+        private static bool IsBrowserEmulationSet()
+        {
+            return GetBrowserEmulationVersion() != BrowserEmulationVersion.Default;
+        }
+
+        private static bool SetBrowserEmulationVersion(BrowserEmulationVersion browserEmulationVersion)
+        {
+            bool result;
+
+            result = false;
+
+            try
+            {
+                RegistryKey key;
+
+                key = Registry.CurrentUser.OpenSubKey(BrowserEmulationKey, true);
+
+                if (key != null)
+                {
+                    string programName;
+
+                    programName = Path.GetFileName(Environment.GetCommandLineArgs()[0]);
+
+                    if (browserEmulationVersion != BrowserEmulationVersion.Default)
+                    {
+                        // if it's a valid value, update or create the value
+                        key.SetValue(programName, (int)browserEmulationVersion, RegistryValueKind.DWord);
+                        logger.Warn("SETTING REGISTRY:{0}-{1}-{2}-{3}",key.Name,programName, (int)browserEmulationVersion, RegistryValueKind.DWord.ToString());
+                    }
+                    else
+                    {
+                        // otherwise, remove the existing value
+                        key.DeleteValue(programName, false);
+                        logger.Warn("DELETING REGISTRY KEY:{0}-{1}", key.Name, programName);
+                    }
+
+                    result = true;
+                }
+            }
+            catch (SecurityException se)
+            {
+                // The user does not have the permissions required to read from the registry key.
+                logger.Error(se);
+            }
+            catch (UnauthorizedAccessException uae)
+            {
+                // The user does not have the necessary registry rights.
+                logger.Error(uae);
+            }
+
+            return result;
+        }
+
+        private static bool SetBrowserEmulationVersion()
+        {
+            int ieVersion;
+            BrowserEmulationVersion emulationCode;
+
+            ieVersion = GetInternetExplorerMajorVersion();
+            logger.Warn("IE Version {0} is identified",ieVersion );
+
+            if (ieVersion >= 11)
+            {
+                emulationCode = BrowserEmulationVersion.Version11;
+            }
+            else
+            {
+                switch (ieVersion)
+                {
+                    case 10:
+                        emulationCode = BrowserEmulationVersion.Version10;
+                        break;
+                    case 9:
+                        emulationCode = BrowserEmulationVersion.Version9;
+                        break;
+                    case 8:
+                        emulationCode = BrowserEmulationVersion.Version8;
+                        break;
+                    default:
+                        emulationCode = BrowserEmulationVersion.Version7;
+                        break;
+                }
+            }
+
+            return SetBrowserEmulationVersion(emulationCode);
+        }
+
+        public static void UpdateBrowserEmulationVersion()
+        {
+            if (!IsBrowserEmulationSet())
+            {
+                logger.Warn("Updating the registry to ensure that the latest browser version is used");
+                SetBrowserEmulationVersion();
+            }
+        }
+
+
+    }
 
     public static class Helpers
     {
 
+        private static NLog.Logger logger = NLog.LogManager.GetCurrentClassLogger();
 
+        /// <summary>
+        /// Gets a value indicating whether application is running under Mono.
+        /// </summary>
+        /// <value>
+        ///   <c>true</c> if application is running under Mono; otherwise, <c>false</c>.
+        /// </value>
+        public static bool OnMono => Type.GetType("Mono.Runtime") != null;
+
+        /// <summary>
+        /// Gets the application display version from the current assemblies <see cref="AssemblyInformationalVersionAttribute"/>.
+        /// </summary>
+        /// <value>
+        /// The application display version.
+        /// </value>
+        public static string DisplayVersion
+        {
+            get
+            {
+                string v = Assembly.GetExecutingAssembly().GetCustomAttributes(typeof(AssemblyInformationalVersionAttribute), false).Cast<AssemblyInformationalVersionAttribute>().First().InformationalVersion;
+
+#if DEBUG
+                v += " ** Debug Build **";
+#endif
+
+                return v;
+            }
+        }
 
         public static string pad(int i)
         {
@@ -344,26 +618,18 @@ namespace TVRename
                 System.Diagnostics.Process.Start(what, arguments);
                 return true;
             }
-            catch
+            catch (Exception e)
             {
+                logger.Error(e);
                 return false;
             }
         }
 
-        public static Color WarningColor()
-        {
-            return Color.FromArgb(255, 210, 210);
-        }
+        public static Color WarningColor() => Color.FromArgb(255, 210, 210);
 
-        public static bool Contains(string source, string toCheck, StringComparison comp)
-        {
-            return source.IndexOf(toCheck, comp) >= 0;
-        }
-
-        public static string TranslateColorToHtml(Color c)
-        {
-            return String.Format("#{0:X2}{1:X2}{2:X2}", c.R, c.G, c.B);
-        }
+        public static bool Contains(string source, string toCheck, StringComparison comp) => source.IndexOf(toCheck, comp) >= 0;
+        
+        public static string TranslateColorToHtml(Color c) =>String.Format("#{0:X2}{1:X2}{2:X2}", c.R, c.G, c.B);
         
         public static string SimplifyName(string n)
         {

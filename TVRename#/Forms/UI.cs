@@ -26,6 +26,8 @@ using File = Alphaleonis.Win32.Filesystem.File;
 using Path = Alphaleonis.Win32.Filesystem.Path;
 using System.IO;
 using System.Linq;
+using System.Text;
+using TVRename.Ipc;
 
 namespace TVRename
 {
@@ -63,7 +65,7 @@ namespace TVRename
     ///          the designers will not be able to interact properly with localized
     ///          resources associated with this form.
     /// </summary>
-    public partial class UI : Form
+    public partial class UI : Form, IRemoteActions
     {
         #region Delegates
 
@@ -74,10 +76,6 @@ namespace TVRename
 
         protected int Busy;
         private TVDoc mDoc;
-        public IPCDelegate IPCBringToForeground;
-        public IPCDelegate IPCDoAll;
-        public IPCDelegate IPCQuit;
-        public IPCDelegate IPCScan;
         protected bool InternalCheckChange;
         private int LastDLRemaining;
 
@@ -102,14 +100,13 @@ namespace TVRename
         protected Season mLastSeasonClicked;
         protected List<ShowItem> mLastShowsClicked;
 
-        public UI(TVDoc doc)
+        private static NLog.Logger logger = NLog.LogManager.GetCurrentClassLogger();
+
+        public UI(TVDoc doc, TVRenameSplash splash)
         {
 
-            SplashScreen.Show(new TVRenameSplash());
-            SplashScreen.UpdateStatus("Initalising");
-
             this.mDoc = doc;
-
+            
             this.Busy = 0;
             this.mLastEpClicked = null;
             this.mLastFolderClicked = null;
@@ -146,22 +143,21 @@ namespace TVRename
                 this.Hide();
             }
 
-            this.Text = this.Text + " " + Version.DisplayVersionString();
-            SplashScreen.UpdateInfo(Version.DisplayVersionString());
+            this.Text = this.Text + " " + Helpers.DisplayVersion;
 
-            SplashScreen.UpdateStatus("Filling Shows");
+            updateSplashStatus(splash,"Filling Shows");
             this.FillMyShows();
             this.UpdateSearchButton();
             this.ClearInfoWindows();
-            SplashScreen.UpdateProgress(12);
-            SplashScreen.UpdateStatus("Updating WTW");
+            updateSplashPercent(splash, 12);
+            updateSplashStatus(splash, "Updating WTW");
             this.mDoc.DoWhenToWatch(true);
-            SplashScreen.UpdateProgress(50); 
+            updateSplashPercent(splash, 50); 
             this.FillWhenToWatchList();
-            SplashScreen.UpdateProgress(90); 
-            SplashScreen.UpdateStatus("Write Upcoming");
+            updateSplashPercent(splash, 90);
+            updateSplashStatus(splash, "Write Upcoming");
             this.mDoc.WriteUpcoming();
-            SplashScreen.UpdateStatus("Setting Notifications");
+            updateSplashStatus(splash, "Setting Notifications");
             this.ShowHideNotificationIcon();
 
             int t = TVSettings.Instance.StartupTab;
@@ -169,33 +165,42 @@ namespace TVRename
                 this.tabControl1.SelectedIndex = TVSettings.Instance.StartupTab;
             this.tabControl1_SelectedIndexChanged(null, null);
 
-            SplashScreen.UpdateStatus("Starting Monitor");
+            updateSplashStatus(splash, "Starting Monitor");
 
             this.mAutoFolderMonitor = new TVRename.AutoFolderMonitor(mDoc,this);
             if (TVSettings.Instance.MonitorFolders)
                 this.mAutoFolderMonitor.StartMonitor();
 
-            SplashScreen.Close();
-
+            //splash.Close();
         }
 
-        public void ClearInfoWindows()
+        void updateSplashStatus(TVRenameSplash SplashScreen, String text)
         {
-            ClearInfoWindows("");
-
+            SplashScreen.Invoke((System.Action)delegate
+            {
+                SplashScreen.UpdateStatus(text);
+            });
         }
+
+        void updateSplashPercent(TVRenameSplash SplashScreen,int num)
+        {
+            SplashScreen.Invoke((System.Action)delegate
+            {
+                SplashScreen.UpdateProgress (num);
+            });
+        }
+
+
+        public void ClearInfoWindows() =>ClearInfoWindows("");
+
         public void ClearInfoWindows(string defaultText)
         {
             SetHTMLbody(defaultText, EpGuidePath(), this.epGuideHTML);
             SetHTMLbody(defaultText, ImagesGuidePath(), this.webBrowserImages);
-
         }
 
-        public static int BGDLLongInterval()
-        {
-            return 1000 * 60 * 60; // one hour
-        }
-
+        public static int BGDLLongInterval() => 1000 * 60 * 60; // one hour
+        
         protected void MoreBusy()
         {
             Interlocked.Increment(ref this.Busy);
@@ -208,57 +213,12 @@ namespace TVRename
 
         private void SetupIPC()
         {
-            this.IPCBringToForeground += this.ShowYourself;
-            this.IPCScan += this.ScanAll;
-            this.IPCDoAll += this.ActionAll;
-            this.IPCQuit += this.Close;
-
-            this.AFMFullScan += this.ScanAll;
+            this.AFMFullScan += this.ProcessAll;
             this.AFMQuickScan += this.QuickScan; 
             this.AFMRecentScan += this.ScanRecent;
-
-            this.AFMDoAll += this.ActionAll;
-            
-            int retries = 2;
-            while (retries > 0)
-            {
-                try
-                {
-                    //Instantiate our server channel.
-                    IpcServerChannel channel = new IpcServerChannel("TVRenameChannel");
-
-                    //Register the server channel.
-                    ChannelServices.RegisterChannel(channel, true);
-
-                    //Register this service type.
-                    RemotingConfiguration.RegisterWellKnownServiceType(typeof (IPCMethods), "IPCMethods",
-                                                                       WellKnownObjectMode.Singleton);
-
-                    IPCMethods.Setup(this, this.mDoc);
-                    break; // got this far, all is good, exit retry loop
-                }
-                catch
-                {
-                    // Maybe there is a half-dead TVRename process?  Try to kill it off.
-                    String pn = Process.GetCurrentProcess().ProcessName; 
-                    Process[] procs = Process.GetProcessesByName(pn);
-                    foreach (Process proc in procs)
-                    {
-                        if (proc.Id != Process.GetCurrentProcess().Id)
-                        {
-                            try
-                            {
-                                proc.Kill();
-                            }
-                            catch
-                            {
-                            }
-                        }
-                    }
-                }
-                retries--;
-            } // retry loop
+            this.AFMDoAll += this.ProcessAll;
         }
+
 
         public void SetProgressActual(int p)
         {
@@ -276,9 +236,9 @@ namespace TVRename
             // TODO: Unify command line handling between here and in Program.cs
 
             if (this.mDoc.Args.Scan || this.mDoc.Args.DoAll) // doall implies scan
-                this.ScanAll();
+                this.Scan();
             if (this.mDoc.Args.DoAll)
-                this.ActionAll();
+                this.ProcessAll();
             if (this.mDoc.Args.Quit || this.mDoc.Args.Hide)
                 this.Close();
         }
@@ -672,7 +632,7 @@ namespace TVRename
 
         private static string QuickStartGuide()
         {
-            return "http://tvrename.com/quickstart-2.2.html";
+            return "http://www.tvrename.com/quickstart";
         }
 
         private void ShowQuickStartGuide()
@@ -821,6 +781,7 @@ namespace TVRename
             SetHTMLbody(infoPaneBody, EpGuidePath(), this.epGuideHTML);
             SetHTMLbody(imagesPaneBody, ImagesGuidePath(), this.webBrowserImages);
         }
+
         private string GetSeasonImagesHTMLOverview(ShowItem si, SeriesInfo ser, int snum)
         {
             string body = "";
@@ -850,7 +811,7 @@ namespace TVRename
             }
             else
             {
-                body += "<h2>Images are not being downloaded for this series. Please see Options -> Settings -> Media Center to reconfigure.</h2>";
+                body += "<h2>Images are not being downloaded for this series. Please see Options -> Preferences -> Media Center to reconfigure.</h2>";
             }
 
             return body;
@@ -1073,22 +1034,9 @@ namespace TVRename
 
         // FillEpGuideHTML
 
-        public static string EpGuidePath()
-        {
-            string tp = Path.GetTempPath();
-            return tp + "tvrenameepguide.html";
-        }
-
-        public static string ImagesGuidePath()
-        {
-            string tp = Path.GetTempPath();
-            return tp + "tvrenameimagesguide.html";
-        }
-
-        public static string LocalFileURLBase(string path)
-        {
-            return "file://" + path;
-        }
+        public static string EpGuidePath() => FileHelper.TempPath("tvrenameepguide.html");
+        public static string ImagesGuidePath() => FileHelper.TempPath("tvrenameimagesguide.html");
+        public static string LocalFileURLBase(string path) =>"file://" + path;
 
         public static void SetHTMLbody(string body, string path, WebBrowser web)
         {
@@ -1147,19 +1095,6 @@ namespace TVRename
             this.RefreshWTW(true);
         }
 
-        public List<ProcessedEpisode> GetMissingEps()
-        {
-            List<ProcessedEpisode> missing = new List<ProcessedEpisode>();
-            foreach (ListViewItem lvi in this.lvWhenToWatch.Items)
-            {
-                if (lvi.ImageIndex == 1)
-                {
-                    missing.Add((ProcessedEpisode)(lvi.Tag));
-                }
-            }
-            return missing;
-        }
-
         public void FillWhenToWatchList()
         {
             this.mInternalChange++;
@@ -1181,56 +1116,28 @@ namespace TVRename
 
             System.Collections.Generic.List<DateTime> bolded = new System.Collections.Generic.List<DateTime>();
             DirFilesCache dfc = new DirFilesCache();
-            foreach (ShowItem si in this.mDoc.GetShowItems(true))
+
+            List<ProcessedEpisode> recentEps = this.mDoc.getRecentAndFutureEps(dfc, dd);
+
+            foreach (ProcessedEpisode ei in recentEps )
             {
-                if (!si.ShowNextAirdate)
-                    continue;
+                DateTime? dt = ei.GetAirDateDT(true);
+                if ((dt != null) ) bolded.Add(dt.Value);
 
-                foreach (KeyValuePair<int, List<ProcessedEpisode>> kvp in si.SeasonEpisodes)
+                ListViewItem lvi = new System.Windows.Forms.ListViewItem();
+                lvi.Text = "";
+                for (int i = 0; i < 7; i++) lvi.SubItems.Add("");
+
+                this.UpdateWTW(dfc, ei, lvi);
+
+                this.lvWhenToWatch.Items.Add(lvi);
+
+                foreach (ProcessedEpisode pe in selections)
                 {
-                    if (si.IgnoreSeasons.Contains(kvp.Key))
-                        continue; // ignore this season
-
-                    List<ProcessedEpisode> eis = kvp.Value;
-
-                    bool nextToAirFound = false;
-
-                    foreach (ProcessedEpisode ei in eis)
+                    if (pe.SameAs(ei))
                     {
-                        DateTime? dt = ei.GetAirDateDT(true);
-                        if ((dt != null) && (dt.Value.CompareTo(DateTime.MaxValue) != 0))
-                        {
-                            TimeSpan ts = dt.Value.Subtract(DateTime.Now);
-                            if (ts.TotalHours >= (-24 * dd)) // in the future (or fairly recent)
-                            {
-                                bolded.Add(dt.Value);
-                                if ((ts.TotalHours >= 0) && (!nextToAirFound))
-                                {
-                                    nextToAirFound = true;
-                                    ei.NextToAir = true;
-                                }
-                                else
-                                    ei.NextToAir = false;
-
-                                ListViewItem lvi = new System.Windows.Forms.ListViewItem();
-                                lvi.Text = "";
-                                for (int i = 0; i < 7; i++)
-                                    lvi.SubItems.Add("");
-
-                                this.UpdateWTW(dfc, ei, lvi);
-
-                                this.lvWhenToWatch.Items.Add(lvi);
-
-                                foreach (ProcessedEpisode pe in selections)
-                                {
-                                    if (pe.SameAs(ei))
-                                    {
-                                        lvi.Selected = true;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
+                        lvi.Selected = true;
+                        break;
                     }
                 }
             }
@@ -1470,7 +1377,7 @@ namespace TVRename
             UP.Show();
         }
 
-        public void ShowYourself()
+        public void FocusWindow()
         {
             if (!TVSettings.Instance.ShowInTaskbar)
                 this.Show();
@@ -1482,7 +1389,7 @@ namespace TVRename
         public void notifyIcon1_DoubleClick(object sender, MouseEventArgs e)
         {
             this.tmrShowUpcomingPopup.Stop();
-            this.ShowYourself();
+            this.FocusWindow();
         }
 
         public void buyMeADrinkToolStripMenuItem_Click(object sender, System.EventArgs e)
@@ -2075,20 +1982,6 @@ namespace TVRename
             }
         }
 
-        public void RightClickOnFolder(string folderPath, Point pt)
-        {
-            this.mLastFolderClicked = folderPath;
-            this.folderRightClickMenu.Items.Clear();
-
-            int n = 0;
-
-            ToolStripMenuItem tsi = new ToolStripMenuItem("Open: " + folderPath);
-            tsi.Tag = n++;
-            this.folderRightClickMenu.Items.Add(tsi);
-
-            this.folderRightClickMenu.Show(pt);
-        }
-
         public void lvWhenToWatch_MouseClick(object sender, System.Windows.Forms.MouseEventArgs e)
         {
             if (e.Button != System.Windows.Forms.MouseButtons.Right)
@@ -2473,6 +2366,8 @@ namespace TVRename
 
         private void bnMyShowsAdd_Click(object sender, System.EventArgs e)
         {
+            logger.Info("****************");
+            logger.Info("Adding New Show");
             this.MoreBusy();
             ShowItem si = new ShowItem();
             TheTVDB.Instance.GetLock( "AddShow");
@@ -2488,8 +2383,9 @@ namespace TVRename
                     ser.ShowTimeZone = aes.ShowTimeZone;
                 this.ShowAddedOrEdited(true);
                 this.SelectShow(si);
+                logger.Info("Added new show called {0}",ser.Name );
+            } else logger.Info("Cancelled adding new show");
 
-            }
             this.LessBusy();
         }
 
@@ -2510,7 +2406,6 @@ namespace TVRename
                 return;
 
             this.DeleteShow(si);
-            this.mDoc.ExportShowInfo(); //Save shows list to disk
         }
 
         private void DeleteShow(ShowItem si)
@@ -2595,14 +2490,7 @@ namespace TVRename
 
         private void ForceRefresh(List<ShowItem> sis)
         {
-            if (sis != null)
-            {
-                foreach (ShowItem si in sis)
-                {
-                    TheTVDB.Instance.ForgetShow(si.TVDBCode, true);
-                }
-            }
-            this.mDoc.DoDownloadsFG();
+            this.mDoc.ForceRefresh(sis);
             this.FillMyShows();
             this.FillEpGuideHTML();
             this.RefreshWTW(false);
@@ -2623,7 +2511,6 @@ namespace TVRename
 
             }
         }
-
         
         private void bnMyShowsRefresh_Click(object sender, System.EventArgs e)
         {
@@ -2885,58 +2772,25 @@ namespace TVRename
 
         private void bnActionCheck_Click(object sender, System.EventArgs e)
         {
-            this.ScanAll();
-            this.mDoc.ExportMissingXML(); //Save missing shows to XML
-        }
+            this.Scan();
+         }
 
-        private void ScanAll()
+        public void Scan()
         {
             this.tabControl1.SelectedTab = this.tbAllInOne;
             this.Scan(null);
+            this.mDoc.ExportMissingXML(); //Save missing shows to XML
         }
 
         private void ScanRecent()
         {
-            // only scan "recent" shows
-            List<ShowItem> shows = new List<ShowItem>();
-            int dd = TVSettings.Instance.WTWRecentDays;
-            
-            // for each show, see if any episodes were aired in "recent" days...
-            foreach (ShowItem si in this.mDoc.GetShowItems(true))
-            {
-                bool added = false;
-
-                foreach (KeyValuePair<int, List<ProcessedEpisode>> kvp in si.SeasonEpisodes)
-                {
-                    if (added)
-                        break;
-
-                    if (si.IgnoreSeasons.Contains(kvp.Key))
-                        continue; // ignore this season
-
-                    List<ProcessedEpisode> eis = kvp.Value;
-
-                    foreach (ProcessedEpisode ei in eis)
-                    {
-                        DateTime? dt = ei.GetAirDateDT(true);
-                        if ((dt != null) && (dt.Value.CompareTo(DateTime.MaxValue) != 0))
-                        {
-                            TimeSpan ts = dt.Value.Subtract(DateTime.Now);
-                            if ((ts.TotalHours >= (-24 * dd)) && (ts.TotalHours <= 0)) // fairly recent?
-                            {
-                                shows.Add(si);
-                                added = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            Scan(shows);
+            Scan(this.mDoc.getRecentShows());
         }
 
         private void Scan(List<ShowItem> shows)
         {
+            logger.Info("*******************************");
+            logger.Info("Starting Scan for {0} shows...",shows?.Count>0? shows.Count.ToString() :"all");
             this.MoreBusy();
             this.mDoc.ActionGo(shows);
             this.LessBusy();
@@ -2946,8 +2800,10 @@ namespace TVRename
 
         private void QuickScan()
         {
+            logger.Info("*******************************");
+            logger.Info("Starting QuickScan...");
             this.MoreBusy();
-            this.mDoc.QuickScan(GetMissingEps());
+            this.mDoc.QuickScan();
             this.LessBusy();
             this.FillMyShows(); // scanning can download more info to be displayed in my shows
             this.FillActionList();
@@ -3109,7 +2965,7 @@ namespace TVRename
             this.ActionAction(true);
         }
 
-        private void ActionAll()
+        public void ProcessAll()
         {
             this.ActionAction(true);
         }
@@ -3209,7 +3065,6 @@ namespace TVRename
 
             this.showRightClickMenu.Show(pt);
         }
-
 
         private void lvAction_SelectedIndexChanged(object sender, System.EventArgs e)
         {
@@ -3555,16 +3410,10 @@ namespace TVRename
             }
         }
 
-        private void bnActionRecentCheck_Click(object sender, EventArgs e)
-        {
-            this.ScanRecent();
-        }
-
-        private void btnActionQuickScan_Click(object sender, EventArgs e)
-        {
-            this.QuickScan();
-        }
-
+        private void bnActionRecentCheck_Click(object sender, EventArgs e) => this.ScanRecent();
+        
+        private void btnActionQuickScan_Click(object sender, EventArgs e) => this.QuickScan();
+        
         private void btnFilter_Click(object sender, EventArgs e)
         {
             Filters filters = new Filters(this.mDoc);
@@ -3629,5 +3478,12 @@ namespace TVRename
                 SendMessage(filterTextBox.Handle, 0xd3, (IntPtr)2, (IntPtr)(filterButton.Width << 16));
             }
         }
+
+        private void visitSupportForumToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            Helpers.SysOpen("https://groups.google.com/forum/#!forum/tvrename");
+        }
+        
+        public void Quit() => Close();
     }
 }

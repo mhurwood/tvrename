@@ -190,6 +190,7 @@ namespace TVRename
 
         private static volatile TVSettings instance;
         private static object syncRoot = new Object();
+        private static NLog.Logger logger = NLog.LogManager.GetCurrentClassLogger();
 
         public static TVSettings Instance
         {
@@ -347,6 +348,7 @@ namespace TVRename
 
         public void load(XmlReader reader)
         {
+            
             this.SetToDefaults();
 
             reader.Read();
@@ -710,7 +712,7 @@ namespace TVRename
 
             // ResumeDatPath
             FileInfo f2 =
-                new FileInfo(System.Windows.Forms.Application.UserAppDataPath + "\\..\\..\\..\\uTorrent\\resume.dat");
+                new FileInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), @"uTorrent\resume.dat"));
             this.ResumeDatPath = f2.Exists ? f2.FullName : "";
         }
 
@@ -819,10 +821,7 @@ namespace TVRename
             writer.WriteEndElement(); // FNPRegexs
 
             writer.WriteStartElement("RSSURLs");
-            foreach (string s in this.RSSURLs)
-            {
-                XMLHelper.WriteElementToXML(writer,"URL",s);
-            }
+            foreach (string s in this.RSSURLs) XMLHelper.WriteElementToXML(writer,"URL",s);
             writer.WriteEndElement(); // RSSURLs
 
             if (ShowStatusColors != null)
@@ -845,55 +844,14 @@ namespace TVRename
             {
                 writer.WriteStartElement("ShowFilters");
 
-                if (Filter.ShowName != null)
-                {
-                    writer.WriteStartElement("NameFilter");
-                    writer.WriteStartAttribute("Name");
-                    writer.WriteValue(Filter.ShowName);
-                    writer.WriteEndAttribute();
-                    writer.WriteEndElement();
-                }
+                XMLHelper.WriteInfo(writer, "NameFilter", "Name", Filter.ShowName);
+                XMLHelper.WriteInfo(writer, "ShowStatusFilter", "ShowStatus", Filter.ShowStatus);
+                XMLHelper.WriteInfo(writer, "ShowNetworkFilter", "ShowNetwork", Filter.ShowNetwork);
+                XMLHelper.WriteInfo(writer, "ShowRatingFilter", "ShowRating", Filter.ShowRating);
 
-                if (Filter.ShowStatus != null)
-                {
-                    writer.WriteStartElement("ShowStatusFilter");
-                    writer.WriteStartAttribute("ShowStatus");
-                    writer.WriteValue(Filter.ShowStatus);
-                    writer.WriteEndAttribute();
-                    writer.WriteEndElement();
-                }
-
-                if (Filter.ShowNetwork  != null)
-                {
-                    writer.WriteStartElement("ShowNetworkFilter");
-                    writer.WriteStartAttribute("ShowNetwork");
-                    writer.WriteValue(Filter.ShowNetwork );
-                    writer.WriteEndAttribute();
-                    writer.WriteEndElement();
-                }
-
-                if (Filter.ShowRating  != null)
-                {
-                    writer.WriteStartElement("ShowRatingFilter");
-                    writer.WriteStartAttribute("ShowRating");
-                    writer.WriteValue(Filter.ShowRating);
-                    writer.WriteEndAttribute();
-                    writer.WriteEndElement();
-                }
-
-                if (Filter.Genres.Count != 0)
-                {
-                    foreach (String Genre in Filter.Genres)
-                    {
-                        writer.WriteStartElement("GenreFilter");
-                        writer.WriteStartAttribute("Genre");
-                        writer.WriteValue(Genre);
-                        writer.WriteEndAttribute();
-                        writer.WriteEndElement();
-                    }
-                }
-
-                writer.WriteEndElement();
+                foreach (String Genre in Filter.Genres) XMLHelper.WriteInfo(writer, "GenreFilter", "Genre", Genre);
+ 
+                writer.WriteEndElement(); //ShowFilters
             }
 
             writer.WriteEndElement(); // settings
@@ -993,10 +951,7 @@ namespace TVRename
 
         private static List<string> DefaultRSSURLList()
         {
-            List<string> sl = new List<String>
-                                  {
-                                      "http://tvrss.net/feed/eztv"
-                                  };
+            List<string> sl = new List<String>();
             return sl;
         }
 

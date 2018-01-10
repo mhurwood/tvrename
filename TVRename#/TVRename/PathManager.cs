@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using Alphaleonis.Win32.Filesystem;
 using FileInfo = Alphaleonis.Win32.Filesystem.FileInfo;
 
@@ -35,6 +35,8 @@ namespace TVRename
 
         protected static FileInfo GetFileInfo(string path, string file)
         {
+            Directory.CreateDirectory(path);
+
             return new FileInfo(System.IO.Path.Combine(path, file));
         }
 
@@ -48,7 +50,7 @@ namespace TVRename
                 }
                 else
                 {
-                    return GetFileInfo(System.Windows.Forms.Application.UserAppDataPath, StatisticsFileName);
+                    return GetFileInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TVRename", "TVRename", "2.1"), StatisticsFileName);
                 }
             }
         }
@@ -63,7 +65,7 @@ namespace TVRename
                 }
                 else
                 {
-                    return GetFileInfo(System.Windows.Forms.Application.UserAppDataPath, LayoutFileName);
+                    return GetFileInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TVRename", "TVRename", "2.1"), LayoutFileName);
                 }
             }
         }
@@ -78,7 +80,7 @@ namespace TVRename
                 }
                 else
                 {
-                    return GetFileInfo(System.Windows.Forms.Application.UserAppDataPath, UILayoutFileName);
+                    return GetFileInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TVRename", "TVRename", "2.1"), UILayoutFileName);
                 }
             }
         }
@@ -93,7 +95,7 @@ namespace TVRename
                 }
                 else
                 {
-                    return GetFileInfo(System.Windows.Forms.Application.UserAppDataPath, TVDBFileName);
+                    return GetFileInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TVRename", "TVRename", "2.1"), TVDBFileName);
                 }
             }
         }
@@ -108,7 +110,7 @@ namespace TVRename
                 }
                 else
                 {
-                    return GetFileInfo(System.Windows.Forms.Application.UserAppDataPath, SettingsFileName);
+                    return GetFileInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TVRename", "TVRename", "2.1"), SettingsFileName);
                 }
             }
         }
