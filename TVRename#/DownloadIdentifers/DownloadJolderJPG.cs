@@ -1,6 +1,4 @@
-﻿using System;
 using System.Collections.Generic;
-using System.Text;
 using FileInfo = Alphaleonis.Win32.Filesystem.FileInfo;
 
 namespace TVRename
@@ -46,7 +44,7 @@ namespace TVRename
 
 
                     if (!string.IsNullOrEmpty(downloadPath))
-                        TheActionList.Add(new ActionDownload(si, null, fi, downloadPath, false));
+                        TheActionList.Add(new ActionDownloadImage(si, null, fi, downloadPath, false));
                     doneFolderJPG.Add(fi.FullName);
                 }
                 return TheActionList;
@@ -80,7 +78,7 @@ namespace TVRename
                         bannerPath = si.TheSeries().GetImage(TVSettings.Instance.ItemForFolderJpg());
                     }
                     if (!string.IsNullOrEmpty(bannerPath))
-                        TheActionList.Add(new ActionDownload(si, null, fi, bannerPath,
+                        TheActionList.Add(new ActionDownloadImage(si, null, fi, bannerPath,
                                                                   TVSettings.Instance.ShrinkLargeMede8erImages));
                     doneFolderJPG.Add(fi.FullName);
                 }
@@ -90,10 +88,9 @@ namespace TVRename
             
             return base.ProcessSeason(si,folder,snum,forceRefresh);
         }
-        public override void reset()
+        public sealed override void reset()
         {
             doneFolderJPG  = new List<string>();
-            base.reset();
         }
     }
 

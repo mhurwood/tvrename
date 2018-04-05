@@ -1,9 +1,9 @@
-﻿// 
+// 
 // Main website for TVRename is http://tvrename.com
 // 
-// Source code available at http://code.google.com/p/tvrename/
+// Source code available at https://github.com/TV-Rename/tvrename
 // 
-// This code is released under GPLv3 http://www.gnu.org/licenses/gpl.html
+// This code is released under GPLv3 https://github.com/TV-Rename/tvrename/blob/master/LICENSE.md
 // 
 namespace TVRename
 {
@@ -11,24 +11,28 @@ namespace TVRename
     using Alphaleonis.Win32.Filesystem;
     using System.Windows.Forms;
 
-    public class ItemMissing : Item, ScanListItem
+    public class ItemMissing : Item
     {
         public string TheFileNoExt;
+        private string folder;
+        public string Filename;
 
-        public ItemMissing(ProcessedEpisode pe, string whereItShouldBeNoExt)
+        public ItemMissing(ProcessedEpisode pe, string whereItShouldBeFolder, string expectedFilenameNoExt)
         {
             this.Episode = pe;
-            this.TheFileNoExt = whereItShouldBeNoExt;
+            this.TheFileNoExt = whereItShouldBeFolder + System.IO.Path.DirectorySeparatorChar + expectedFilenameNoExt;
+            this.folder = whereItShouldBeFolder;
+            this.Filename = expectedFilenameNoExt;
         }
 
         #region Item Members
 
-        public bool SameAs(Item o)
+        public override bool SameAs(Item o)
         {
             return (o is ItemMissing) && (string.Compare((o as ItemMissing).TheFileNoExt, this.TheFileNoExt) == 0);
         }
 
-        public int Compare(Item o)
+        public override int Compare(Item o)
         {
             ItemMissing miss = o as ItemMissing;
             //return (o == null || miss == null) ? 0 : (this.TheFileNoExt + this.Episode.Name).CompareTo(miss.TheFileNoExt + miss.Episode.Name);
@@ -42,22 +46,19 @@ namespace TVRename
                 return this.Episode.SI.ShowName.CompareTo(miss.Episode.SI.ShowName);
             }
 
-            if (!this.Episode.SeasonNumber.Equals(miss.Episode.SeasonNumber))
+            if (!this.Episode.AppropriateSeasonNumber.Equals(miss.Episode.AppropriateSeasonNumber))
             {
-                int compare = this.Episode.SeasonNumber.CompareTo(miss.Episode.SeasonNumber);
-                return compare;
+                return this.Episode.AppropriateSeasonNumber.CompareTo(miss.Episode.AppropriateSeasonNumber);
             }
 
-            return this.Episode.EpNum.CompareTo(miss.Episode.EpNum);
+            return this.Episode.AppropriateEpNum.CompareTo(miss.Episode.AppropriateEpNum);
         }
 
         #endregion
 
-        #region ScanListItem Members
+        #region Item Members
 
-        public ProcessedEpisode Episode { get; private set; }
-
-        public IgnoreItem Ignore
+        public override  IgnoreItem Ignore
         {
             get
             {
@@ -67,7 +68,7 @@ namespace TVRename
             }
         }
 
-        public ListViewItem ScanListViewItem
+        public override ListViewItem ScanListViewItem
         {
             get
             {
@@ -75,7 +76,7 @@ namespace TVRename
                                                         Text = this.Episode.SI.ShowName
                                                     };
 
-                lvi.SubItems.Add(this.Episode.SeasonNumber.ToString());
+                lvi.SubItems.Add(this.Episode.AppropriateSeasonNumber.ToString());
                 lvi.SubItems.Add(this.Episode.NumsAsString());
 
                 DateTime? dt = this.Episode.GetAirDateDT(true);
@@ -84,9 +85,8 @@ namespace TVRename
                 else
                     lvi.SubItems.Add("");
 
-                FileInfo fi = new FileInfo(this.TheFileNoExt);
-                lvi.SubItems.Add(fi.DirectoryName);
-                lvi.SubItems.Add(fi.Name);
+                lvi.SubItems.Add(this.folder);
+                lvi.SubItems.Add(this.Filename);
 
                 lvi.Tag = this;
 
@@ -94,12 +94,9 @@ namespace TVRename
             }
         }
 
-        public string ScanListViewGroup
-        {
-            get { return "lvgActionMissing"; }
-        }
+        public override string ScanListViewGroup => "lvgActionMissing";
 
-        public string TargetFolder
+        public override string TargetFolder
         {
             get
             {
@@ -109,10 +106,7 @@ namespace TVRename
             }
         }
 
-        public int IconNumber
-        {
-            get { return 1; }
-        }
+        public override int IconNumber => 1;
 
         #endregion
     }

@@ -1,24 +1,22 @@
 // 
 // Main website for TVRename is http://tvrename.com
 // 
-// Source code available at http://code.google.com/p/tvrename/
+// Source code available at https://github.com/TV-Rename/tvrename
 // 
-// This code is released under GPLv3 http://www.gnu.org/licenses/gpl.html
+// This code is released under GPLv3 https://github.com/TV-Rename/tvrename/blob/master/LICENSE.md
 // 
 
 using System;
 using System.Drawing;
 using System.Globalization;
-using Alphaleonis.Win32.Filesystem;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Diagnostics.Contracts;
 using System.Net;
 using Newtonsoft.Json.Linq;
-using System.Web;
-using FileSystemInfo = Alphaleonis.Win32.Filesystem.FileSystemInfo;
-using Directory = Alphaleonis.Win32.Filesystem.Directory;
 using DirectoryInfo = Alphaleonis.Win32.Filesystem.DirectoryInfo;
 using FileInfo = Alphaleonis.Win32.Filesystem.FileInfo;
 using File = Alphaleonis.Win32.Filesystem.File;
@@ -26,13 +24,26 @@ using Path = Alphaleonis.Win32.Filesystem.Path;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using Microsoft.Win32;
 using System.Security;
+using System.Windows.Forms;
+using Microsoft.WindowsAPICodePack.Shell;
+using Microsoft.WindowsAPICodePack.Shell.PropertySystem;
+using NLog;
 
 // Helpful functions and classes
 
 namespace TVRename
 {
+    internal static partial class NativeMethods
+    {
+        [return: MarshalAs(UnmanagedType.Bool)]
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        internal static extern bool GetDiskFreeSpaceEx(string lpDirectoryName, out ulong lpFreeBytesAvailable, out ulong lpTotalNumberOfBytes, out ulong lpTotalNumberOfFreeBytes);
+    }
+
+
     public delegate void SetProgressDelegate(int percent);
 
     public static class XMLHelper
@@ -82,8 +93,10 @@ namespace TVRename
             return res;
         }
 
-        public static void WriteElementToXML(XmlWriter writer, string elementName, string value)
+        public static void WriteElementToXML(XmlWriter writer, string elementName, string value,bool ignoreifBlank = false)
         {
+            if (ignoreifBlank && string.IsNullOrEmpty(value)) return;
+
             writer.WriteStartElement(elementName);
             writer.WriteValue(value??"");
             writer.WriteEndElement();
@@ -174,9 +187,86 @@ namespace TVRename
         }
     }
 
+    public class FileSystemProperties
+    {
+        public  FileSystemProperties(long? totalBytes, long? freeBytes, long? availableBytes)
+        {
+            TotalBytes = totalBytes;
+            FreeBytes = freeBytes;
+            AvailableBytes = availableBytes;
+        }
+
+        /// <summary>
+        /// Gets the total number of bytes on the drive.
+        /// </summary>
+        public long? TotalBytes { get; private set; }
+
+        /// <summary>
+        /// Gets the number of bytes free on the drive.
+        /// </summary>
+        public long? FreeBytes { get; private set; }
+
+        /// <summary>
+        /// Gets the number of bytes available on the drive (counts disk quotas).
+        /// </summary>
+        public long? AvailableBytes { get; private set; }
+    }
+
+
     public static class FileHelper
     {
-        public static bool FolderIsSubfolderOf(string thisOne, string ofThat)
+        public static int GetFilmLength(this FileInfo movieFile)
+        {
+            string duration;
+            using (ShellObject shell = ShellObject.FromParsingName(movieFile.FullName))
+            {
+                // alternatively: shell.Properties.GetProperty("System.Media.Duration");
+                IShellProperty prop = shell.Properties.System.Media.Duration;
+                // Duration will be formatted as 00:44:08
+                duration = prop.FormatForDisplay(PropertyDescriptionFormatOptions.None);
+            }
+
+            return 3600 * int.Parse(duration.Split(':')[0]) + 60 * int.Parse(duration.Split(':')[1]) +
+                   int.Parse(duration.Split(':')[2]);
+
+        }
+
+        public static bool SameDirectoryLocation(this string directoryPath1, string directoryPath2)
+        {
+            // http://stackoverflow.com/questions/1794025/how-to-check-whether-2-directoryinfo-objects-are-pointing-to-the-same-directory
+            return string.Compare(directoryPath1.NormalizePath().TrimEnd('\\'), directoryPath2.NormalizePath().TrimEnd('\\'), StringComparison.InvariantCultureIgnoreCase) == 0;
+        }
+
+        public static string NormalizePath(this string path)
+        {
+            //https://stackoverflow.com/questions/2281531/how-can-i-compare-directory-paths-in-c
+            return Path.GetFullPath(new Uri(path).LocalPath)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                .ToUpperInvariant();
+        }
+
+        public static string RemoveExtension(this FileInfo file, bool useFullPath = false)
+        {
+            string root = useFullPath ? file.FullName : file.Name;
+
+            return root.Substring(0, root.Length - file.Extension.Length);
+        }
+
+        public static void GetFilmDetails(this FileInfo movieFile)
+        {
+            using (ShellPropertyCollection properties = new ShellPropertyCollection(movieFile.FullName))
+            {
+                foreach (IShellProperty prop in properties)
+                {
+                    string value = (prop.ValueAsObject == null)
+                        ? ""
+                        : prop.FormatForDisplay(PropertyDescriptionFormatOptions.None);
+                    Console.WriteLine("{0} = {1}", prop.CanonicalName, value);
+                }
+            }
+        }
+
+   public static bool IsSubfolderOf(this string thisOne, string ofThat)
         {
             // need terminating slash, otherwise "c:\abc def" will match "c:\abc"
             thisOne += System.IO.Path.DirectorySeparatorChar.ToString();
@@ -185,6 +275,48 @@ namespace TVRename
             return ((thisOne.Length >= l) && (thisOne.Substring(0, l).ToLower() == ofThat.ToLower()));
         }
 
+        public static string TTS(this string s) // trim trailing slash
+        {
+            return s.TrimEnd(System.IO.Path.DirectorySeparatorChar);
+        }
+
+
+        public static string GBMB(this long value, int decimalPlaces = 2)
+        {
+            const long OneKb = 1024;
+            const long OneMb = OneKb * 1024;
+            const long OneGb = OneMb * 1024;
+            const long OneTb = OneGb * 1024;
+
+            double asTb = Math.Round((double)value / OneTb, decimalPlaces);
+            double asGb = Math.Round((double)value / OneGb, decimalPlaces);
+            double asMb = Math.Round((double)value / OneMb, decimalPlaces);
+            double asKb = Math.Round((double)value / OneKb, decimalPlaces);
+            double asB  = Math.Round((double)value, decimalPlaces);
+            string chosenValue = asTb >= 1 ? $"{asTb:G3} TB"
+                : asGb >= 1 ? $"{asGb:G3} GB"
+                : asMb >= 1 ? $"{asMb:G3} MB"
+                : asKb >= 1 ? $"{asKb:G3} KB"
+                : $"{asB:G3} B";
+            return chosenValue;
+        }
+
+
+        /// <summary>
+        /// Gets the properties for this file system.
+        /// </summary>
+        /// <param name="volumeIdentifier">The path whose volume properties are to be queried.</param>
+        /// <returns>A <see cref="FileSystemProperties"/> containing the properties for the specified file system.</returns>
+        public static FileSystemProperties GetProperties(string volumeIdentifier)
+        {
+            if (NativeMethods.GetDiskFreeSpaceEx(volumeIdentifier, out ulong available, out ulong total, out ulong free))
+            {
+                return new FileSystemProperties((long)total, (long)free, (long)available);
+            }
+            return new FileSystemProperties(null, null, null);
+        }
+
+   
         public static void Rotate(string filenameBase)
         {
             if (File.Exists(filenameBase))
@@ -246,8 +378,21 @@ namespace TVRename
 
         internal static string TempPath(string v) => Path.GetTempPath() + v;
 
-    
-}
+        public static string MakeValidPath(string input)
+        {
+            if (string.IsNullOrWhiteSpace(input)) return "";
+            string directoryName = input;
+            string invalid = new string(Path.GetInvalidFileNameChars()) + new string(Path.GetInvalidPathChars());
+
+            foreach (char c in invalid)
+            {
+                directoryName = directoryName.Replace(c.ToString(), "");
+            }
+
+            return directoryName;
+
+        }
+    }
 
     public static class HTTPHelper
     {
@@ -273,7 +418,6 @@ namespace TVRename
                 {
                     streamWriter.Write(json);
                     streamWriter.Flush();
-                    streamWriter.Close();
                 }
             }
 
@@ -341,9 +485,26 @@ namespace TVRename
 
     public static class StringExtensions
     {
+
+        public static string itemitems(this int n)
+        {
+            return n == 1 ? "Item" : "Items";
+        }
+
         public static bool Contains(this string source, string toCheck, StringComparison comp)
         {
             return source.IndexOf(toCheck, comp) >= 0;
+        }
+
+
+        public static string ReplaceInsensitive(this string source, string search, string replacement)
+        {
+            return Regex.Replace(
+                source,
+                Regex.Escape(search),
+                replacement.Replace("$", "$$"),
+                RegexOptions.IgnoreCase
+                    );
         }
     }
 
@@ -557,7 +718,7 @@ namespace TVRename
     public static class Helpers
     {
 
-        private static NLog.Logger logger = NLog.LogManager.GetCurrentClassLogger();
+        private static Logger logger = LogManager.GetCurrentClassLogger();
 
         /// <summary>
         /// Gets a value indicating whether application is running under Mono.
@@ -566,6 +727,54 @@ namespace TVRename
         ///   <c>true</c> if application is running under Mono; otherwise, <c>false</c>.
         /// </value>
         public static bool OnMono => Type.GetType("Mono.Runtime") != null;
+
+
+        public static void Swap<T>(
+            this IList<T> list,
+            int firstIndex,
+            int secondIndex
+        )
+        {
+            Contract.Requires(list != null);
+            Contract.Requires(firstIndex >= 0 && firstIndex < list.Count);
+            Contract.Requires(secondIndex >= 0 && secondIndex < list.Count);
+            if (firstIndex == secondIndex)
+            {
+                return;
+            }
+            T temp = list[firstIndex];
+            list[firstIndex] = list[secondIndex];
+            list[secondIndex] = temp;
+        }
+        
+        public static void SafeInvoke(this Control uiElement, System.Action updater, bool forceSynchronous)
+        {
+            if (uiElement == null)
+            {
+                throw new ArgumentNullException("uiElement");
+            }
+
+            if (uiElement.InvokeRequired)
+            {
+                if (forceSynchronous)
+                {
+                    uiElement.Invoke((System.Action)delegate { SafeInvoke(uiElement, updater, forceSynchronous); });
+                }
+                else
+                {
+                    uiElement.BeginInvoke((System.Action)delegate { SafeInvoke(uiElement, updater, forceSynchronous); });
+                }
+            }
+            else
+            {
+                if (uiElement.IsDisposed)
+                {
+                    throw new ObjectDisposedException("Control is already disposed.");
+                }
+
+                updater();
+            }
+        }
 
         /// <summary>
         /// Gets the application display version from the current assemblies <see cref="AssemblyInformationalVersionAttribute"/>.
@@ -601,7 +810,6 @@ namespace TVRename
 
         public static long ToUnixTime(this DateTime date)
         {
-            var epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
             return Convert.ToInt64((date.ToUniversalTime() - epoch).TotalSeconds);
         }
 
@@ -610,12 +818,13 @@ namespace TVRename
             return epoch.AddSeconds(unixTime);
         }
         private static readonly DateTime epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        public static readonly DateTime windowsStartDateTime = new DateTime(1980, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
         public static bool SysOpen(string what, string arguments = null)
         {
             try
             {
-                System.Diagnostics.Process.Start(what, arguments);
+                Process.Start(what, arguments);
                 return true;
             }
             catch (Exception e)
@@ -641,6 +850,80 @@ namespace TVRename
             n = n.Replace("!", "");
             n = Regex.Replace(n, "[_\\W]+", " ");
             return n.Trim();
+        }
+
+        public static string CompareName(string n)
+        {
+            //TODO consider whether merge with above
+            n = Helpers.RemoveDiacritics(n);
+            n = Regex.Replace(n, "[^\\w ]", "");
+            return SimplifyName(n);
+
+        }
+
+
+        public static string GetCommonStartString(List<string> testValues)
+        {
+            string root = string.Empty;
+            bool first = true;
+            foreach (string test in testValues)
+            {
+                if (first)
+                {
+                    root = test;
+                    first = false;
+                }
+                else
+                {
+                    root = GetCommonStartString(root, test);
+                }
+                
+            }
+            return root;
+        }
+
+        public static string TrimEnd(this string root, string ending)
+        {
+            if (!root.EndsWith(ending,StringComparison.OrdinalIgnoreCase)) return root;
+
+            return root.Substring(0, root.Length - ending.Length);
+        }
+
+        public static string RemoveAfter(this string root, string ending)
+        {
+            if (root.IndexOf(ending, StringComparison.OrdinalIgnoreCase) !=-1)
+                return   root.Substring(0, root.IndexOf(ending,StringComparison.OrdinalIgnoreCase));
+            return root;
+        }
+
+        public static string TrimEnd(this string root, string[] endings)
+        {
+            string trimmedString = root;
+            foreach (string ending in endings)
+            {
+                trimmedString = trimmedString.TrimEnd(ending);
+            }
+
+            return trimmedString;
+        }
+
+        public static string GetCommonStartString(string first, string second)
+        {
+            StringBuilder builder = new StringBuilder();
+            
+            int minLength = Math.Min(first.Length, second.Length);
+            for (int i = 0; i < minLength; i++)
+            {
+                if (first[i].Equals(second[i]))
+                {
+                    builder.Append(first[i]);
+                }
+                else
+                {
+                    break;
+                }
+            }
+            return builder.ToString();
         }
 
         public static string RemoveDiacritics(string stIn)

@@ -1,15 +1,15 @@
-﻿using System.Collections.Generic;
+using System;
+using System.Collections.Generic;
 using System.IO;
-using Alphaleonis.Win32.Filesystem;
 using Directory = Alphaleonis.Win32.Filesystem.Directory;
 using File = Alphaleonis.Win32.Filesystem.File;
 
 namespace TVRename
 {
-    public class AutoFolderMonitor
+    public sealed class AutoFolderMonitor :IDisposable 
     {
-        private TVDoc mDoc;
-        private UI mUI;
+        private readonly TVDoc mDoc;
+        private readonly UI mUI;
         private List<System.IO.FileSystemWatcher> Watchers = new List<System.IO.FileSystemWatcher>();
         private System.Timers.Timer mScanDelayTimer;
         private static NLog.Logger logger = NLog.LogManager.GetCurrentClassLogger();
@@ -114,6 +114,12 @@ namespace TVRename
                 watcher.Dispose();
             }
             Watchers.Clear();
+        }
+
+        public void Dispose()
+        {
+            // ReSharper disable once UseNullPropagation
+            if (this.mScanDelayTimer != null) this.mScanDelayTimer.Dispose();
         }
     }
 }

@@ -1,10 +1,13 @@
-﻿// 
+// 
 // Main website for TVRename is http://tvrename.com
 // 
-// Source code available at http://code.google.com/p/tvrename/
+// Source code available at https://github.com/TV-Rename/tvrename
 // 
-// This code is released under GPLv3 http://www.gnu.org/licenses/gpl.html
+// This code is released under GPLv3 https://github.com/TV-Rename/tvrename/blob/master/LICENSE.md
 // 
+
+using System.Linq.Expressions;
+
 namespace TVRename
 {
     using System;
@@ -13,100 +16,68 @@ namespace TVRename
     using System.Xml;
 
 
-    public class ActionMede8erViewXML : Item, Action, ScanListItem, ActionWriteMetadata
+    public class ActionMede8erViewXML : ActionWriteMetadata
     {
-        public FileInfo Where;
         public ShowItem SI; // if for an entire show, rather than specific episode
-        public int snum;
+        public int Snum;
 
         public ActionMede8erViewXML(FileInfo nfo, ShowItem si)
         {
             this.SI = si;
             this.Where = nfo;
-            snum = -1;
+            this.Snum = -1;
         }
 
         public ActionMede8erViewXML(FileInfo nfo, ShowItem si, int snum)
         {
             this.SI = si;
             this.Where = nfo;
-            this.snum = snum;
-        }
-
-        public string produces
-        {
-            get { return this.Where.FullName; }
+            this.Snum = snum;
         }
 
         #region Action Members
 
-        public string Name
-        {
-            get { return "Write Mede8er View Data"; }
-        }
+        public override  string Name => "Write Mede8er View Data";
 
-        public bool Done { get; private set; }
-        public bool Error { get; private set; }
-        public string ErrorText { get; set; }
-
-        public string ProgressText
-        {
-            get { return this.Where.Name; }
-        }
-
-        public double PercentDone
-        {
-            get { return this.Done ? 100 : 0; }
-        }
-
-        public long SizeOfWork
-        {
-            get { return 10000; }
-        }
-
-        public bool Go(ref bool pause, TVRenameStats stats)
+        public override bool Go(ref bool pause, TVRenameStats stats)
         {
             XmlWriterSettings settings = new XmlWriterSettings
             {
                 Indent = true,
                 NewLineOnAttributes = true
             };
-            // "try" and silently fail.  eg. when file is use by other...
-            XmlWriter writer;
             try
             {
-                writer = XmlWriter.Create(this.Where.FullName, settings);
-                if (writer == null)
-                    return false;
+                using (XmlWriter writer = XmlWriter.Create(this.Where.FullName, settings))
+                {
+
+                    writer.WriteStartElement("FolderTag");
+                    // is it a show or season folder
+                    if (this.Snum >= 0)
+                    {
+                        // if episode thumbnails are generated, use ViewMode Photo, otherwise use List
+                        XMLHelper.WriteElementToXML(writer, "ViewMode", TVSettings.Instance.EpJPGs ? "Photo" : "List");
+                        XMLHelper.WriteElementToXML(writer, "ViewType", "Video");
+                    }
+                    else
+                    {
+                        XMLHelper.WriteElementToXML(writer, "ViewMode", "Preview");
+                    }
+
+                    writer.WriteEndElement();
+
+                }
             }
-            catch (Exception)
+
+            catch (Exception e)
             {
+                this.Error = true;
+                this.ErrorText = e.Message;
                 this.Done = true;
-                return true;
+                return false;
+
             }
 
-            writer.WriteStartElement("FolderTag");
-            // is it a show or season folder
-            if (snum >= 0)
-            {
-                // if episode thumbnails are generated, use ViewMode Photo, otherwise use List
-                if (TVSettings.Instance.EpJPGs)
-                {
-                    XMLHelper.WriteElementToXML(writer, "ViewMode", "Photo");
-                }
-                else
-                {
-                    XMLHelper.WriteElementToXML(writer, "ViewMode", "List");
-                }
-                XMLHelper.WriteElementToXML(writer, "ViewType", "Video");
-            }
-            else
-            {
-                XMLHelper.WriteElementToXML(writer, "ViewMode", "Preview");
-            }
-            writer.WriteEndElement();
-
-            writer.Close();
             this.Done = true;
             return true;
         }
@@ -115,12 +86,12 @@ namespace TVRename
 
         #region Item Members
 
-        public bool SameAs(Item o)
+        public override bool SameAs(Item o)
         {
-            return (o is ActionMede8erViewXML) && ((o as ActionMede8erViewXML).Where == this.Where);
+            return (o is ActionMede8erViewXML xml) && (xml.Where == this.Where);
         }
 
-        public int Compare(Item o)
+        public override int Compare(Item o)
         {
             ActionMede8erViewXML nfo = o as ActionMede8erViewXML;
 
@@ -129,9 +100,9 @@ namespace TVRename
 
         #endregion
 
-        #region ScanListItem Members
+        #region Item Members
 
-        public IgnoreItem Ignore
+        public override  IgnoreItem Ignore
         {
             get
             {
@@ -141,14 +112,14 @@ namespace TVRename
             }
         }
 
-        public ListViewItem ScanListViewItem
+        public override ListViewItem ScanListViewItem
         {
             get
             {
                 ListViewItem lvi = new ListViewItem();
 
                 lvi.Text = this.SI.ShowName;
-                if (snum > 0) { lvi.SubItems.Add(snum.ToString()); } else { lvi.SubItems.Add(""); }
+                lvi.SubItems.Add(this.Snum > 0 ? this.Snum.ToString() : "");
                 lvi.SubItems.Add("");
                 lvi.SubItems.Add("");
 
@@ -161,27 +132,11 @@ namespace TVRename
             }
         }
 
-        string ScanListItem.TargetFolder
-        {
-            get
-            {
-                if (this.Where == null)
-                    return null;
-                return this.Where.DirectoryName;
-            }
-        }
+        public override string TargetFolder => this.Where == null ? null : this.Where.DirectoryName;
 
-        public string ScanListViewGroup
-        {
-            get { return "lvgActionMeta"; }
-        }
+        public override string ScanListViewGroup => "lvgActionMeta";
 
-        public int IconNumber
-        {
-            get { return 7; }
-        }
-
-        public ProcessedEpisode Episode { get; private set; }
+        public override int IconNumber => 7;
 
         #endregion
 

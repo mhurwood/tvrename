@@ -1,9 +1,9 @@
-﻿// 
+// 
 // Main website for TVRename is http://tvrename.com
 // 
-// Source code available at http://code.google.com/p/tvrename/
+// Source code available at https://github.com/TV-Rename/tvrename
 // 
-// This code is released under GPLv3 http://www.gnu.org/licenses/gpl.html
+// This code is released under GPLv3 https://github.com/TV-Rename/tvrename/blob/master/LICENSE.md
 // 
 namespace TVRename
 {
@@ -11,9 +11,8 @@ namespace TVRename
     using Alphaleonis.Win32.Filesystem;
     using System.Windows.Forms;
 
-    public class ItemuTorrenting : Item, ScanListItem
+    public class ItemuTorrenting : ItemInProgress
     {
-        public string DesiredLocationNoExt;
         public TorrentEntry Entry;
 
         public ItemuTorrenting(TorrentEntry te, ProcessedEpisode pe, string desiredLocationNoExt)
@@ -25,15 +24,14 @@ namespace TVRename
 
         #region Item Members
 
-        public bool SameAs(Item o)
+        public override bool SameAs(Item o)
         {
-            return (o is ItemuTorrenting) && this.Entry == (o as ItemuTorrenting).Entry;
+            return (o is ItemuTorrenting torrenting) && this.Entry == torrenting.Entry;
         }
 
-        public int Compare(Item o)
+        public override int Compare(Item o)
         {
-            ItemuTorrenting ut = o as ItemuTorrenting;
-            if (ut == null)
+            if (!(o is ItemuTorrenting ut))
                 return 0;
 
             if (this.Episode == null)
@@ -46,9 +44,9 @@ namespace TVRename
 
         #endregion
 
-        #region ScanListItem Members
+        #region Item Members
 
-        public string TargetFolder
+        public override string TargetFolder
         {
             get
             {
@@ -58,26 +56,14 @@ namespace TVRename
             }
         }
 
-        public ProcessedEpisode Episode { get; private set; }
-
-        public IgnoreItem Ignore
-        {
-            get
-            {
-                if (string.IsNullOrEmpty(this.DesiredLocationNoExt))
-                    return null;
-                return new IgnoreItem(this.DesiredLocationNoExt);
-            }
-        }
-
-        public ListViewItem ScanListViewItem
+        public override ListViewItem ScanListViewItem
         {
             get
             {
                 ListViewItem lvi = new ListViewItem();
 
                 lvi.Text = this.Episode.SI.ShowName;
-                lvi.SubItems.Add(this.Episode.SeasonNumber.ToString());
+                lvi.SubItems.Add(this.Episode.AppropriateSeasonNumber.ToString());
                 lvi.SubItems.Add(this.Episode.NumsAsString());
                 DateTime? dt = this.Episode.GetAirDateDT(true);
                 if ((dt != null) && (dt.Value.CompareTo(DateTime.MaxValue) != 0))
@@ -96,15 +82,7 @@ namespace TVRename
             }
         }
 
-        public string ScanListViewGroup
-        {
-            get { return "lvgDownloading"; }
-        }
-
-        int ScanListItem.IconNumber
-        {
-            get { return 2; }
-        }
+        public override int IconNumber => 2;
 
         #endregion
     }

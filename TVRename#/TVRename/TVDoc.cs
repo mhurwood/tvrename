@@ -1,16 +1,15 @@
 // 
 // Main website for TVRename is http://tvrename.com
 // 
-// Source code available at http://code.google.com/p/tvrename/
+// Source code available at https://github.com/TV-Rename/tvrename
 // 
-// This code is released under GPLv3 http://www.gnu.org/licenses/gpl.html
+// This code is released under GPLv3 https://github.com/TV-Rename/tvrename/blob/master/LICENSE.md
 // 
 // "Doc" is short for "Document", from the "Document" and "View" model way of thinking of things.
 // All the processing and work should be done in here, nothing in UI.cs
 // Means we can run TVRename and do useful stuff, without showing any UI. (i.e. text mode / console app)
 
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using Alphaleonis.Win32.Filesystem;
@@ -20,15 +19,15 @@ using System.Threading;
 using System.Windows.Forms;
 using System.Linq;
 using System.Xml;
-using FileSystemInfo = Alphaleonis.Win32.Filesystem.FileSystemInfo;
 using Directory = Alphaleonis.Win32.Filesystem.Directory;
 using DirectoryInfo = Alphaleonis.Win32.Filesystem.DirectoryInfo;
 using FileInfo = Alphaleonis.Win32.Filesystem.FileInfo;
 using System.Text;
+using Newtonsoft.Json.Linq;
 
 namespace TVRename
 {
-    public class TVDoc
+    public class TVDoc :IDisposable
     {
         public List<ShowItem> ShowItems;
         public List<string> MonitorFolders;
@@ -66,12 +65,28 @@ namespace TVRename
         private static NLog.Logger threadslogger = NLog.LogManager.GetLogger("threads");
 
         private List<Finder> Finders;
-        readonly string[] SeasonWords = { "Season", // EN
-            "Saison", // FR, DE
-            "temporada", // ES
-            "Seizoen" //Dutch
-        }; // TODO: move into settings, and allow user to edit these
 
+        private IEnumerable<string>  GetSeasonWords()
+        {
+            //See https://github.com/TV-Rename/tvrename/issues/241 for background
+
+            IEnumerable<string>  seasonWordsFromShows = from si in this.ShowItems select si.AutoAdd_SeasonFolderName.Trim();
+            List<string> results =  seasonWordsFromShows.Distinct().ToList();
+
+            results.Add(TVSettings.Instance.defaultSeasonWord);
+            results.AddRange(TVSettings.Instance.searchSeasonWordsArray);
+
+            return results.Where(t => !String.IsNullOrWhiteSpace(t)).Distinct();
+        }
+
+        private IEnumerable<string> SeasonWordsCache;
+
+        internal IEnumerable<string> SeasonWords()
+        {
+            if (SeasonWordsCache == null) SeasonWordsCache = GetSeasonWords();
+            return SeasonWordsCache;
+
+        }
 
         public List<String> getGenres()
         {
@@ -109,12 +124,12 @@ namespace TVRename
             return distinctValues;
         }
 
-        public List<String> GetRatings()
+        public List<String> GetContentRatings()
         {
             List<String> allValues = new List<string> { };
             foreach (ShowItem si in ShowItems)
             {
-                if (si.TheSeries()?.GetRating() != null) allValues.Add(si.TheSeries().GetRating());
+                if (si.TheSeries()?.GetContentRating() != null) allValues.Add(si.TheSeries().GetContentRating());
             }
             List<String> distinctValues = allValues.Distinct().ToList();
             distinctValues.Sort();
@@ -168,14 +183,10 @@ namespace TVRename
             //    StartServer();
         }
 
+
         public void UpdateTVDBLanguage()
         {
             TheTVDB.Instance.RequestLanguage = TVSettings.Instance.PreferredLanguage;
-        }
-
-        ~TVDoc()
-        {
-            this.StopBGDownloadThread();
         }
 
         private void LockShowItems()
@@ -224,15 +235,9 @@ namespace TVRename
             return this.mStats;
         }
 
-        public void SetDirty()
-        {
-            this.mDirty = true;
-        }
+        public void SetDirty() => this.mDirty = true;
 
-        public bool Dirty()
-        {
-            return this.mDirty;
-        }
+        public bool Dirty() => this.mDirty;
 
         public List<ShowItem> GetShowItems(bool lockThem)
         {
@@ -256,6 +261,11 @@ namespace TVRename
             }
             this.UnlockShowItems();
             return null;
+        }
+
+        internal static bool FindSeasEp(FileInfo theFile, out int seasF, out int epF, out int maxEp, ShowItem sI)
+        {
+            return FindSeasEp( theFile, out  seasF, out  epF, out  maxEp,  sI, out FilenameProcessorRE rex);
         }
 
         //			void WebServer()
@@ -285,25 +295,32 @@ namespace TVRename
             this.SetDirty();
         }
 
-        public bool MonitorFolderHasSeasonFolders(DirectoryInfo di, out string folderName)
+        public bool HasSeasonFolders(DirectoryInfo di, out string folderName, out DirectoryInfo[] subDirs)
         {
             try
             {
+                subDirs =  di.GetDirectories();
                 // keep in sync with ProcessAddItems, etc.
-                foreach (string sw in SeasonWords)
+                foreach (string sw in SeasonWords())
                 {
-                    DirectoryInfo[] di2 = di.GetDirectories("*" + sw + " *");
-                    if (di2.Length == 0)
-                        continue;
+                    foreach (DirectoryInfo subDir in subDirs)
+                    {
+                        if (subDir.Name.Contains(sw, StringComparison.InvariantCultureIgnoreCase))
+                        {
+                            logger.Info("Assuming {0} contains a show because keyword '{1}' is found in subdirectory {2}", di.FullName, sw, subDir.FullName);
+                            folderName = sw;
+                            return true;
 
-                    folderName = sw;
-                    return true;
+                        }
+                    }
                 }
+
             }
             catch (UnauthorizedAccessException uae)
             {
                 // e.g. recycle bin, system volume information
-                logger.Warn(uae, "Could not access {0} (or a subdir), may not be an issue as could be expected e.g. recycle bin, system volume information",di.FullName);
+                logger.Warn("Could not access {0} (or a subdir), may not be an issue as could be expected e.g. recycle bin, system volume information",di.FullName);
+                subDirs = null;
             }
  
 
@@ -311,82 +328,109 @@ namespace TVRename
             return false;
         }
 
-        public bool MonitorAddSingleFolder(DirectoryInfo di2, bool andGuess)
+        public bool CheckFolderForShows(DirectoryInfo di2, bool andGuess, out DirectoryInfo[] subDirs )
         {
             // ..and not already a folder for one of our shows
             string theFolder = di2.FullName.ToLower();
-            bool alreadyHaveIt = false;
             foreach (ShowItem si in ShowItems)
             {
-                if (si.AutoAddNewSeasons && !string.IsNullOrEmpty(si.AutoAdd_FolderBase) && FileHelper.FolderIsSubfolderOf(theFolder, si.AutoAdd_FolderBase))
+                if (si.AutoAddNewSeasons && !string.IsNullOrEmpty(si.AutoAdd_FolderBase) &&
+                    theFolder.IsSubfolderOf(si.AutoAdd_FolderBase))
                 {
                     // we're looking at a folder that is a subfolder of an existing show
-                    alreadyHaveIt = true;
-                    break;
+                    logger.Info("Rejecting {0} as it's already part of {1}.", theFolder, si.ShowName);
+                    subDirs = null;
+                    return true;
                 }
 
-                Dictionary<int, List<string>> afl = si.AllFolderLocations();
-                foreach (KeyValuePair<int, List<string>> kvp in afl)
+                if (si.UsesManualFolders())
                 {
-                    foreach (string folder in kvp.Value)
+                    Dictionary<int, List<string>> afl = si.AllFolderLocations();
+                    foreach (KeyValuePair<int, List<string>> kvp in afl)
                     {
-                        if (theFolder.ToLower() != folder.ToLower())
-                            continue;
+                        foreach (string folder in kvp.Value)
+                        {
+                            if (theFolder.ToLower() != folder.ToLower())
+                                continue;
 
-                        alreadyHaveIt = true;
-                        break;
+                            logger.Info("Rejecting {0} as it's already part of {1}:{2}.", theFolder, si.ShowName, folder);
+                            subDirs = null;
+                            return true;
+                        }
                     }
                 }
-
-                if (alreadyHaveIt)
-                    break;
             } // for each showitem
 
+
+            //We don't have it already
             bool hasSeasonFolders = false;
             try
             {
-                string folderName = null;
-                hasSeasonFolders = MonitorFolderHasSeasonFolders(di2, out folderName);
-                bool hasSubFolders = di2.GetDirectories().Length > 0;
-                if (!alreadyHaveIt && (!hasSubFolders || hasSeasonFolders))
+                hasSeasonFolders = HasSeasonFolders(di2, out string folderName, out DirectoryInfo[] subDirectories);
+
+                subDirs = subDirectories;
+
+                //This is an indication that something is wrong
+                if (subDirectories is null) return false;
+
+                bool hasSubFolders = subDirectories?.Length > 0;
+                if (!hasSubFolders || hasSeasonFolders)
                 {
+                    if (TVSettings.Instance.BulkAddCompareNoVideoFolders  && !HasFilmFiles(di2)) return false;
+
+                    if (TVSettings.Instance.BulkAddIgnoreRecycleBin && di2.FullName.Contains("$RECYCLE.BIN",StringComparison.OrdinalIgnoreCase))
+                        return true;
+
                     // ....its good!
                     FolderMonitorEntry ai = new FolderMonitorEntry(di2.FullName, hasSeasonFolders, folderName);
-                    AddItems.Add(ai);
+                    this.AddItems.Add(ai);
+                    logger.Info("Adding {0} as a new folder", theFolder);
                     if (andGuess)
-                        this.MonitorGuessShowItem(ai);
+                        this.GuessShowItem(ai);
                 }
 
             }
             catch (UnauthorizedAccessException)
             {
-                alreadyHaveIt = true;
+                logger.Info("Can't access {0}, so ignoring it", di2.FullName);
+                subDirs = null;
+                return true;
             }
 
-            return hasSeasonFolders || alreadyHaveIt;
+            return hasSeasonFolders;
         }
 
-        public void MonitorCheckFolderRecursive(DirectoryInfo di, ref bool stop)
+        private static bool HasFilmFiles(DirectoryInfo directory)
         {
-            // is it on the folder monitor ignore list?
-            if (this.IgnoreFolders.Contains(di.FullName.ToLower()))
-                return;
+            return directory.GetFiles("*", System.IO.SearchOption.TopDirectoryOnly).Any(file => TVSettings.Instance.UsefulExtension(file.Extension, false));
+        }
 
-            if (MonitorAddSingleFolder(di, false))
+        public void CheckFolderForShows(DirectoryInfo di, ref bool stop)
+        {
+            // is it on the ''Bulk Add Shows' ignore list?
+            if (this.IgnoreFolders.Contains(di.FullName.ToLower()))
+            {
+                logger.Info("Rejecting {0} as it's on the ignore list.", di.FullName);
+                return;
+            }
+
+            if (CheckFolderForShows(di, false, out DirectoryInfo[] subDirs))
                 return; // done.
 
-            // recursively check a monitored folder for new shows
+            if (subDirs == null) return; //indication we could not access the subdirectory
 
-            foreach (DirectoryInfo di2 in di.GetDirectories())
+            // recursively check a folder for new shows
+
+            foreach (DirectoryInfo di2 in subDirs)
             {
                 if (stop)
                     return;
 
-                this.MonitorCheckFolderRecursive(di2, ref stop); // not a season folder.. recurse!
+                this.CheckFolderForShows(di2, ref stop); // not a season folder.. recurse!
             } // for each directory
         }
 
-        public void MonitorAddAllToMyShows()
+        public void AddAllToMyShows()
         {
             this.LockShowItems();
 
@@ -418,27 +462,29 @@ namespace TVRename
             ExportShowInfo();
         }
 
-        public void MonitorGuessShowItem(FolderMonitorEntry ai)
+        public void GuessShowItem(FolderMonitorEntry ai)
         {
             string showName = this.GuessShowName(ai);
 
             if (string.IsNullOrEmpty(showName))
                 return;
 
-            TheTVDB.Instance.GetLock("MonitorGuessShowItem");
+            TheTVDB.Instance.GetLock("GuessShowItem");
 
             SeriesInfo ser = TheTVDB.Instance.FindSeriesForName(showName);
             if (ser != null)
                 ai.TVDBCode = ser.TVDBCode;
 
-            TheTVDB.Instance.Unlock("MonitorGuessShowItem");
+            TheTVDB.Instance.Unlock("GuessShowItem");
         }
 
-        public void MonitorCheckFolders(ref bool stop, ref int percentDone)
+        public void CheckFolders(ref bool stop, ref int percentDone)
         {
-            // Check the monitored folder list, and build up a new "AddItems" list.
+            // Check the  folder list, and build up a new "AddItems" list.
             // guessing what the shows actually are isn't done here.  That is done by
-            // calls to "MonitorGuessShowItem"
+            // calls to "GuessShowItem"
+            logger.Info("*********************************************************************");
+            logger.Info("*Starting to find folders that contain files, but are not in library*");
 
             this.AddItems = new FolderMonitorEntryList();
 
@@ -453,7 +499,7 @@ namespace TVRename
                 if (!di.Exists)
                     continue;
 
-                this.MonitorCheckFolderRecursive(di, ref stop);
+                this.CheckFolderForShows(di, ref stop);
 
                 if (stop)
                     break;
@@ -495,22 +541,31 @@ namespace TVRename
         {
             System.Diagnostics.Debug.Assert(this.WorkerSemaphore != null);
 
-            this.WorkerSemaphore.WaitOne(); // don't start until we're allowed to
-
-            int code = (int)(codeIn);
-
-            bool bannersToo = TVSettings.Instance.NeedToDownloadBannerFile();
-
-            threadslogger.Trace("  Downloading " + code);
-            bool r = TheTVDB.Instance.EnsureUpdated(code, bannersToo);
-            threadslogger.Trace("  Finished " + code);
-            if (!r)
+            try
             {
-                this.DownloadOK = false;
-                if (this.DownloadStopOnError)
-                    this.DownloadDone = true;
+                this.WorkerSemaphore.WaitOne(); // don't start until we're allowed to
+
+                int code = (int) (codeIn);
+
+                bool bannersToo = TVSettings.Instance.NeedToDownloadBannerFile();
+
+                threadslogger.Trace("  Downloading " + code);
+                bool r = TheTVDB.Instance.EnsureUpdated(code, bannersToo);
+                threadslogger.Trace("  Finished " + code);
+                if (!r)
+                {
+                    this.DownloadOK = false;
+                    if (this.DownloadStopOnError)
+                        this.DownloadDone = true;
+                }
+
+                this.WorkerSemaphore.Release(1);
             }
-            this.WorkerSemaphore.Release(1);
+            catch (Exception e)
+            {
+                logger.Fatal(e,"Unhandled Exception in GetThread");
+                return;
+            }
         }
 
         public void WaitForAllThreadsAndTidyUp()
@@ -559,9 +614,9 @@ namespace TVRename
                     codes.Add(si.TVDBCode);
                 this.UnlockShowItems();
 
-                
+
                 int numWorkers = TVSettings.Instance.ParallelDownloads;
-                logger.Info("Setting up {0} threads to download information from TVDB.com",numWorkers);
+                logger.Info("Setting up {0} threads to download information from TVDB.com", numWorkers);
                 this.Workers = new List<Thread>();
 
                 this.WorkerSemaphore = new Semaphore(numWorkers, numWorkers); // allow up to numWorkers working at once
@@ -577,7 +632,8 @@ namespace TVRename
                     this.Workers.Add(t);
                     t.Name = "GetThread:" + code;
                     t.Start(code); // will grab the semaphore as soon as we make it available
-                    int nfr = this.WorkerSemaphore.Release(1); // release our hold on the semaphore, so that worker can grab it
+                    int nfr = this.WorkerSemaphore
+                        .Release(1); // release our hold on the semaphore, so that worker can grab it
                     threadslogger.Trace("Started " + code + " pool has " + nfr + " free");
                     Thread.Sleep(1); // allow the other thread a chance to run and grab
 
@@ -599,10 +655,18 @@ namespace TVRename
                 this.DownloadOK = true;
                 return;
             }
-            catch (ThreadAbortException)
+            catch (ThreadAbortException taa)
             {
                 this.DownloadDone = true;
                 this.DownloadOK = false;
+                logger.Error(taa);
+                return;
+            }
+            catch (Exception e)
+            {
+                this.DownloadDone = true;
+                this.DownloadOK = false;
+                logger.Fatal(e,"UNHANDLED EXCEPTION IN DOWNLOAD THREAD");
                 return;
             }
             finally
@@ -620,8 +684,7 @@ namespace TVRename
             this.DownloadPct = 0;
             this.DownloadDone = false;
             this.DownloadOK = true;
-            this.mDownloaderThread = new Thread(this.Downloader);
-            this.mDownloaderThread.Name = "Downloader";
+            this.mDownloaderThread = new Thread(this.Downloader) {Name = "Downloader"};
             this.mDownloaderThread.Start();
         }
 
@@ -760,26 +823,26 @@ namespace TVRename
                 this.GenDict();
         }
 
-        public List<FileInfo> FindEpOnDisk(DirFilesCache dfc, ProcessedEpisode pe)
+        public List<FileInfo> FindEpOnDisk(DirFilesCache dfc, ProcessedEpisode pe,bool checkDirectoryExist = true)
         {
-            return this.FindEpOnDisk(dfc, pe.SI, pe);
+            return this.FindEpOnDisk(dfc, pe.SI, pe, checkDirectoryExist);
         }
 
-        public List<FileInfo> FindEpOnDisk(DirFilesCache dfc, ShowItem si, Episode epi)
+        public List<FileInfo> FindEpOnDisk(DirFilesCache dfc, ShowItem si, Episode epi,bool checkDirectoryExist = true)
         {
             if (dfc == null)
                 dfc = new DirFilesCache();
             List<FileInfo> ret = new List<FileInfo>();
 
-            int seasWanted = epi.TheSeason.SeasonNumber;
-            int epWanted = epi.EpNum;
+            int seasWanted = si.DVDOrder ? epi.TheDVDSeason.SeasonNumber: epi.TheAiredSeason.SeasonNumber;
+            int epWanted = si.DVDOrder ? epi.DVDEpNum : epi.AiredEpNum;
 
-            int snum = epi.TheSeason.SeasonNumber;
+            int snum = seasWanted;
 
-            if (!si.AllFolderLocations().ContainsKey(snum))
+            if (!si.AllFolderLocationsEpCheck(checkDirectoryExist).ContainsKey(snum))
                 return ret;
 
-            foreach (string folder in si.AllFolderLocations()[snum])
+            foreach (string folder in si.AllFolderLocationsEpCheck(checkDirectoryExist)[snum])
             {
                 FileInfo[] files = dfc.Get(folder);
                 if (files == null)
@@ -787,19 +850,15 @@ namespace TVRename
 
                 foreach (FileInfo fiTemp in files)
                 {
-                    int seasFound;
-                    int epFound;
-
                     if (!TVSettings.Instance.UsefulExtension(fiTemp.Extension, false))
                         continue; // move on
 
-                    if (FindSeasEp(fiTemp, out seasFound, out epFound, si))
-                    {
-                        if (seasFound == -1)
-                            seasFound = seasWanted;
-                        if ((seasFound == seasWanted) && (epFound == epWanted))
-                            ret.Add(fiTemp);
-                    }
+                    if (!FindSeasEp(fiTemp, out int seasFound, out int epFound, out int maxEp, si)) continue;
+
+                    if (seasFound == -1)
+                        seasFound = seasWanted;
+                    if ((seasFound == seasWanted) && (epFound == epWanted))
+                        ret.Add(fiTemp);
                 }
             }
 
@@ -808,21 +867,20 @@ namespace TVRename
 
         public bool HasAnyAirdates(ShowItem si, int snum)
         {
-            bool r = false;
-
             SeriesInfo ser = TheTVDB.Instance.GetSeries(si.TVDBCode);
-            if ((ser != null) && (ser.Seasons.ContainsKey(snum)))
+
+            if (ser == null) return false;
+
+            Dictionary<int, Season> seasonsToUse = si.DVDOrder ? ser.DVDSeasons : ser.AiredSeasons;
+
+            if (!seasonsToUse.ContainsKey(snum)) return false;
+
+            foreach (Episode e in seasonsToUse[snum].Episodes)
             {
-                foreach (Episode e in ser.Seasons[snum].Episodes)
-                {
-                    if (e.FirstAired != null)
-                    {
-                        r = true;
-                        break;
-                    }
-                }
+                if (e.FirstAired != null) return true;
+                    
             }
-            return r;
+            return false;
         }
 
         public bool GenerateEpisodeDict(ShowItem si)
@@ -844,7 +902,10 @@ namespace TVRename
             }
 
             bool r = true;
-            foreach (KeyValuePair<int, Season> kvp in ser.Seasons)
+            Dictionary<int, Season> seasonsToUse = si.DVDOrder ?
+                ser.DVDSeasons
+                : ser.AiredSeasons;
+            foreach (KeyValuePair<int, Season> kvp in seasonsToUse)
             {
                 List<ProcessedEpisode> pel = GenerateEpisodes(si, ser, kvp.Key, true);
                 si.SeasonEpisodes[kvp.Key] = pel;
@@ -854,7 +915,7 @@ namespace TVRename
 
             List<int> theKeys = new List<int>();
             // now, go through and number them all sequentially
-            foreach (int snum in ser.Seasons.Keys)
+            foreach (int snum in seasonsToUse.Keys)
                 theKeys.Add(snum);
 
             theKeys.Sort();
@@ -862,12 +923,18 @@ namespace TVRename
             int overallCount = 1;
             foreach (int snum in theKeys)
             {
-                if (snum != 0)
+                if (snum == 0) continue;
+
+                foreach (ProcessedEpisode pe in si.SeasonEpisodes[snum])
                 {
-                    foreach (ProcessedEpisode pe in si.SeasonEpisodes[snum])
+                    pe.OverallNumber = overallCount;
+                    if (si.DVDOrder)
                     {
-                        pe.OverallNumber = overallCount;
-                        overallCount += 1 + pe.EpNum2 - pe.EpNum;
+                        overallCount += 1 + pe.EpNum2 - pe.DVDEpNum;
+                    }
+                    else
+                    {
+                        overallCount += 1 + pe.EpNum2 - pe.AiredEpNum; 
                     }
                 }
             }
@@ -881,10 +948,14 @@ namespace TVRename
         {
             List<ProcessedEpisode> eis = new List<ProcessedEpisode>();
 
-            if ((ser == null) || !ser.Seasons.ContainsKey(snum))
+            if (ser == null) return null;
+
+            Dictionary<int, Season> seasonsToUse = si.DVDOrder ? ser.DVDSeasons : ser.AiredSeasons;
+
+            if (!seasonsToUse.ContainsKey(snum))
                 return null; // todo.. something?
 
-            Season seas = ser.Seasons[snum];
+            Season seas = seasonsToUse[snum];
 
             if (seas == null)
                 return null; // TODO: warn user
@@ -900,42 +971,40 @@ namespace TVRename
             else
                 eis.Sort(new System.Comparison<ProcessedEpisode>(ProcessedEpisode.EPNumberSorter));
 
-            if (si.CountSpecials && ser.Seasons.ContainsKey(0))
+            if (si.CountSpecials && seasonsToUse.ContainsKey(0))
             {
                 // merge specials in
-                foreach (Episode ep in ser.Seasons[0].Episodes)
+                foreach (Episode ep in seasonsToUse[0].Episodes)
                 {
-                    if (ep.Items.ContainsKey("airsbefore_season") && ep.Items.ContainsKey("airsbefore_episode"))
+                    string seasstr = ep.AirsBeforeSeason;
+                    string epstr = ep.AirsBeforeEpisode;
+                    if ((string.IsNullOrEmpty(seasstr)) || (string.IsNullOrEmpty(epstr)))
+                        continue;
+                    int sease = int.Parse(seasstr);
+                    if (sease != snum)
+                        continue;
+                    int epnum = int.Parse(epstr);
+                    for (int i = 0; i < eis.Count; i++)
                     {
-                        string seasstr = ep.Items["airsbefore_season"];
-                        string epstr = ep.Items["airsbefore_episode"];
-                        if ((string.IsNullOrEmpty(seasstr)) || (string.IsNullOrEmpty(epstr)))
-                            continue;
-                        int sease = int.Parse(seasstr);
-                        if (sease != snum)
-                            continue;
-                        int epnum = int.Parse(epstr);
-                        for (int i = 0; i < eis.Count; i++)
+                        if ((eis[i].AppropriateSeasonNumber == sease) && (eis[i].AppropriateEpNum == epnum))
                         {
-                            if ((eis[i].SeasonNumber == sease) && (eis[i].EpNum == epnum))
+                            ProcessedEpisode pe = new ProcessedEpisode(ep, si)
                             {
-                                ProcessedEpisode pe = new ProcessedEpisode(ep, si)
-                                {
-                                    TheSeason = eis[i].TheSeason,
-                                    SeasonID = eis[i].SeasonID
-                                };
-                                eis.Insert(i, pe);
-                                break;
-                            }
+                                TheAiredSeason = eis[i].TheAiredSeason,
+                                TheDVDSeason = eis[i].TheDVDSeason,
+                                SeasonID = eis[i].SeasonID
+                            };
+                            eis.Insert(i, pe);
+                            break;
                         }
                     }
                 }
                 // renumber to allow for specials
                 int epnumr = 1;
-                for (int j = 0; j < eis.Count; j++)
+                foreach (ProcessedEpisode t in eis)
                 {
-                    eis[j].EpNum2 = epnumr + (eis[j].EpNum2 - eis[j].EpNum);
-                    eis[j].EpNum = epnumr;
+                    t.EpNum2 = epnumr + (t.EpNum2 - t.AppropriateEpNum);
+                    t.AppropriateEpNum = epnumr;
                     epnumr++;
                 }
             }
@@ -962,7 +1031,7 @@ namespace TVRename
                 // turn nn1 and nn2 from ep number into position in array
                 for (int i = 0; i < eis.Count; i++)
                 {
-                    if (eis[i].EpNum == nn1)
+                    if (eis[i].AppropriateEpNum == nn1)
                     {
                         n1 = i;
                         break;
@@ -970,7 +1039,7 @@ namespace TVRename
                 }
                 for (int i = 0; i < eis.Count; i++)
                 {
-                    if (eis[i].EpNum == nn2)
+                    if (eis[i].AppropriateEpNum == nn2)
                     {
                         n2 = i;
                         break;
@@ -980,7 +1049,7 @@ namespace TVRename
                 if (sr.DoWhatNow == RuleAction.kInsert)
                 {
                     // this only applies for inserting an episode, at the end of the list
-                    if (nn1 == eis[eis.Count - 1].EpNum + 1) // after the last episode
+                    if (nn1 == eis[eis.Count - 1].AppropriateEpNum + 1) // after the last episode
                         n1 = eis.Count;
                 }
 
@@ -1027,7 +1096,8 @@ namespace TVRename
                                     ProcessedEpisode pe2 = new ProcessedEpisode(ei, si, ProcessedEpisode.ProcessedEpisodeType.split)
                                     {
                                         Name = nameBase + " (Part " + (i + 1) + ")",
-                                        EpNum = -2,
+                                        AiredEpNum = -2,
+                                        DVDEpNum =-2,
                                         EpNum2 = -2
                                     };
                                     eis.Insert(n1 + i, pe2);
@@ -1041,19 +1111,21 @@ namespace TVRename
                             if ((n1 != -1) && (n2 != -1) && (n1 < ec) && (n2 < ec) && (n1 < n2))
                             {
                                 ProcessedEpisode oldFirstEI = eis[n1];
-                                string combinedName = eis[n1].Name + " + ";
+                                List<string> episodeNames = new List<string> { eis[n1].Name };
+                                string defaultCombinedName = eis[n1].Name + " + ";
                                 string combinedSummary = eis[n1].Overview + "<br/><br/>";
                                 List<Episode> alleps = new List<Episode>();
                                 alleps.Add(eis[n1]);
                                 //int firstNum = eis[n1]->TVcomEpCount();
                                 for (int i = n1 + 1; i <= n2; i++)
                                 {
-                                    combinedName += eis[i].Name;
+                                    episodeNames.Add(eis[i].Name);
+                                    defaultCombinedName += eis[i].Name;
                                     combinedSummary += eis[i].Overview;
                                     alleps.Add(eis[i]);
                                     if (i != n2)
                                     {
-                                        combinedName += " + ";
+                                        defaultCombinedName += " + ";
                                         combinedSummary += "<br/><br/>";
                                     }
                                 }
@@ -1062,10 +1134,13 @@ namespace TVRename
 
                                 eis.RemoveAt(n1);
 
+                                string combinedName = GetBestNameFor(episodeNames, defaultCombinedName);
+
                                 ProcessedEpisode pe2 = new ProcessedEpisode(oldFirstEI, si, alleps)
                                 {
                                     Name = ((string.IsNullOrEmpty(txt)) ? combinedName : txt),
-                                    EpNum = -2
+                                    AiredEpNum = -2,
+                                    DVDEpNum = -2
                                 };
                                 if (sr.DoWhatNow == RuleAction.kMerge)
                                     pe2.EpNum2 = -2 + n2 - n1;
@@ -1092,10 +1167,11 @@ namespace TVRename
                             if ((n1 < ec) && (n1 >= 0))
                             {
                                 ProcessedEpisode t = eis[n1];
-                                ProcessedEpisode n = new ProcessedEpisode(t.TheSeries, t.TheSeason, si)
+                                ProcessedEpisode n = new ProcessedEpisode(t.TheSeries, t.TheAiredSeason,t.TheDVDSeason, si)
                                 {
                                     Name = txt,
-                                    EpNum = -2,
+                                    AiredEpNum = -2,
+                                    DVDEpNum =-2,
                                     EpNum2 = -2
                                 };
                                 eis.Insert(n1, n);
@@ -1103,10 +1179,11 @@ namespace TVRename
                             else if (n1 == eis.Count)
                             {
                                 ProcessedEpisode t = eis[n1 - 1];
-                                ProcessedEpisode n = new ProcessedEpisode(t.TheSeries, t.TheSeason, si)
+                                ProcessedEpisode n = new ProcessedEpisode(t.TheSeries, t.TheAiredSeason, t.TheDVDSeason, si)
                                 {
                                     Name = txt,
-                                    EpNum = -2,
+                                    AiredEpNum = -2,
+                                    DVDEpNum = -2,
                                     EpNum2 = -2
                                 };
                                 eis.Add(n);
@@ -1125,6 +1202,25 @@ namespace TVRename
             }
         }
 
+        public static string GetBestNameFor(List<string> episodeNames, string defaultName)
+        {
+            string root = Helpers.GetCommonStartString(episodeNames);
+            int shortestEpisodeName = episodeNames.Min(x => x.Length);
+            int longestEpisodeName = episodeNames.Max(x => x.Length);
+            bool namesSameLength = (shortestEpisodeName == longestEpisodeName);
+            bool rootIsIgnored = root.Trim().Equals("Episode", StringComparison.OrdinalIgnoreCase) ||
+                                 root.Trim().Equals("Part", StringComparison.OrdinalIgnoreCase);
+
+            if (!namesSameLength || rootIsIgnored || root.Length <= 3 || root.Length <= shortestEpisodeName / 2)
+                return defaultName;
+
+
+            char[] charsToTrim = { ',', '.', ';', ':', '-', '(' };
+            string[] wordsToTrim = { "part", "episode" };
+
+            return root.Trim().TrimEnd(wordsToTrim).Trim().TrimEnd(charsToTrim).Trim();
+        }
+
         public static void Renumber(List<ProcessedEpisode> eis)
         {
             if (eis.Count == 0)
@@ -1132,17 +1228,16 @@ namespace TVRename
 
             // renumber 
             // pay attention to specials etc.
-            int n = (eis[0].EpNum == 0) ? 0 : 1;
+            int n = (eis[0].AppropriateEpNum == 0) ? 0 : 1;
 
-            for (int i = 0; i < eis.Count; i++)
+            foreach (ProcessedEpisode t in eis)
             {
-                if (eis[i].EpNum != -1) // is -1 if its a special or other ignored ep
-                {
-                    int num = eis[i].EpNum2 - eis[i].EpNum;
-                    eis[i].EpNum = n;
-                    eis[i].EpNum2 = n + num;
-                    n += num + 1;
-                }
+                if (t.AppropriateEpNum == -1) continue;
+
+                int num = t.EpNum2 - t.AppropriateEpNum;
+                t.AppropriateEpNum = n;
+                t.EpNum2 = n + num;
+                n += num + 1;
             }
         }
 
@@ -1152,9 +1247,9 @@ namespace TVRename
             // Assume is blah\blah\blah\show\season X
             string showName = ai.Folder;
 
-            foreach (string seasonWord in this.SeasonWords)
+            foreach (string seasonWord in this.SeasonWords())
             {
-                string seasonFinder = ".*" + seasonWord + "[ _\\.]+([0-9]+).*"; // todo: don't look for just one season word
+                string seasonFinder = ".*" + seasonWord + "[ _\\.]+([0-9]+).*"; 
                 if (Regex.Matches(showName, seasonFinder, RegexOptions.IgnoreCase).Count == 0)
                     continue;
 
@@ -1212,7 +1307,6 @@ namespace TVRename
 
                 writer.WriteEndElement(); // tvrename
                 writer.WriteEndDocument();
-                writer.Close();
             }
 
             this.mDirty = false;
@@ -1241,97 +1335,99 @@ namespace TVRename
                     return true; // that's ok
                 }
 
-                XmlReader reader = XmlReader.Create(from.FullName, settings);
-
-                reader.Read();
-                if (reader.Name != "xml")
+                using (XmlReader reader = XmlReader.Create(from.FullName, settings))
                 {
-                    this.LoadErr = from.Name + " : Not a valid XML file";
-                    return false;
-                }
 
-                reader.Read();
-
-                if (reader.Name != "TVRename")
-                {
-                    this.LoadErr = from.Name + " : Not a TVRename settings file";
-                    return false;
-                }
-
-                if (reader.GetAttribute("Version") != "2.1")
-                {
-                    this.LoadErr = from.Name + " : Incompatible version";
-                    return false;
-                }
-
-                reader.Read(); // move forward one
-
-                while (!reader.EOF)
-                {
-                    if (reader.Name == "TVRename" && !reader.IsStartElement())
-                        break; // end of it all
-
-                    if (reader.Name == "Settings")
+                    reader.Read();
+                    if (reader.Name != "xml")
                     {
-                        TVSettings.Instance.load(reader.ReadSubtree());
-                        reader.Read();
+                        this.LoadErr = from.Name + " : Not a valid XML file";
+                        return false;
                     }
-                    else if (reader.Name == "MyShows")
+
+                    reader.Read();
+
+                    if (reader.Name != "TVRename")
                     {
-                        XmlReader r2 = reader.ReadSubtree();
-                        r2.Read();
-                        r2.Read();
-                        while (!r2.EOF)
+                        this.LoadErr = from.Name + " : Not a TVRename settings file";
+                        return false;
+                    }
+
+                    if (reader.GetAttribute("Version") != "2.1")
+                    {
+                        this.LoadErr = from.Name + " : Incompatible version";
+                        return false;
+                    }
+
+                    reader.Read(); // move forward one
+
+                    while (!reader.EOF)
+                    {
+                        if (reader.Name == "TVRename" && !reader.IsStartElement())
+                            break; // end of it all
+
+                        if (reader.Name == "Settings")
                         {
-                            if ((r2.Name == "MyShows") && (!r2.IsStartElement()))
-                                break;
-                            if (r2.Name == "ShowItem")
-                            {
-                                ShowItem si = new ShowItem(r2.ReadSubtree());
-
-                                if (si.UseCustomShowName) // see if custom show name is actually the real show name
-                                {
-                                    SeriesInfo ser = si.TheSeries();
-                                    if ((ser != null) && (si.CustomShowName == ser.Name))
-                                    {
-                                        // then, turn it off
-                                        si.CustomShowName = "";
-                                        si.UseCustomShowName = false;
-                                    }
-                                }
-                                ShowItems.Add(si);
-
-                                r2.Read();
-                            }
-                            else
-                                r2.ReadOuterXml();
+                            TVSettings.Instance.load(reader.ReadSubtree());
+                            reader.Read();
                         }
-                        reader.Read();
-                    }
-                    else if (reader.Name == "MonitorFolders")
-                        this.MonitorFolders = XMLHelper.ReadStringsFromXml(reader, "MonitorFolders", "Folder");
-                    else if (reader.Name == "IgnoreFolders")
-                        this.IgnoreFolders = XMLHelper.ReadStringsFromXml(reader, "IgnoreFolders", "Folder");
-                    else if (reader.Name == "FinderSearchFolders")
-                        this.SearchFolders = XMLHelper.ReadStringsFromXml(reader, "FinderSearchFolders", "Folder");
-                    else if (reader.Name == "IgnoreItems")
-                    {
-                        XmlReader r2 = reader.ReadSubtree();
-                        r2.Read();
-                        r2.Read();
-                        while (r2.Name == "Ignore")
-                            this.Ignore.Add(new IgnoreItem(r2));
-                        reader.Read();
-                    }
-                    else
-                        reader.ReadOuterXml();
-                }
+                        else if (reader.Name == "MyShows")
+                        {
+                            XmlReader r2 = reader.ReadSubtree();
+                            r2.Read();
+                            r2.Read();
+                            while (!r2.EOF)
+                            {
+                                if ((r2.Name == "MyShows") && (!r2.IsStartElement()))
+                                    break;
+                                if (r2.Name == "ShowItem")
+                                {
+                                    ShowItem si = new ShowItem(r2.ReadSubtree());
 
-                reader.Close();
-                reader = null;
+                                    if (si.UseCustomShowName) // see if custom show name is actually the real show name
+                                    {
+                                        SeriesInfo ser = si.TheSeries();
+                                        if ((ser != null) && (si.CustomShowName == ser.Name))
+                                        {
+                                            // then, turn it off
+                                            si.CustomShowName = "";
+                                            si.UseCustomShowName = false;
+                                        }
+                                    }
+
+                                    ShowItems.Add(si);
+
+                                    r2.Read();
+                                }
+                                else
+                                    r2.ReadOuterXml();
+                            }
+
+                            reader.Read();
+                        }
+                        else if (reader.Name == "MonitorFolders")
+                            this.MonitorFolders = XMLHelper.ReadStringsFromXml(reader, "MonitorFolders", "Folder");
+                        else if (reader.Name == "IgnoreFolders")
+                            this.IgnoreFolders = XMLHelper.ReadStringsFromXml(reader, "IgnoreFolders", "Folder");
+                        else if (reader.Name == "FinderSearchFolders")
+                            this.SearchFolders = XMLHelper.ReadStringsFromXml(reader, "FinderSearchFolders", "Folder");
+                        else if (reader.Name == "IgnoreItems")
+                        {
+                            XmlReader r2 = reader.ReadSubtree();
+                            r2.Read();
+                            r2.Read();
+                            while (r2.Name == "Ignore")
+                                this.Ignore.Add(new IgnoreItem(r2));
+                            reader.Read();
+                        }
+                        else
+                            reader.ReadOuterXml();
+                    }
+                }
             }
             catch (Exception e)
             {
+                logger.Warn(e, "Problem on Startup loading File");
                 this.LoadErr = from.Name + " : " + e.Message;
                 return false;
             }
@@ -1345,10 +1441,10 @@ namespace TVRename
                 // not worried if stats loading fails
             }
 
-            //Set these on the settigns object so others can read them too - iealy shuld be refactored into the settings code
-            TVSettings.Instance.MonitorFoldersNames = this.MonitorFolders;
+            //Set these on the settings object so others can read them too - ideally should be refactored into the settings code
+            TVSettings.Instance.LibraryFoldersNames = this.MonitorFolders;
             TVSettings.Instance.IgnoreFoldersNames = this.IgnoreFolders;
-            TVSettings.Instance.SearchFoldersNames = this.SearchFolders;
+            TVSettings.Instance.DownloadFoldersNames = this.SearchFolders;
 
             return true;
         }
@@ -1436,25 +1532,32 @@ namespace TVRename
 
         public void ProcessSingleAction(Object infoIn)
         {
-            ProcessActionInfo info = infoIn as ProcessActionInfo;
-            if (info == null)
-                return;
+            try {
+                ProcessActionInfo info = infoIn as ProcessActionInfo;
+                if (info == null)
+                    return;
 
-            this.ActionSemaphores[info.SemaphoreNumber].WaitOne(); // don't start until we're allowed to
-            this.ActionStarting = false; // let our creator know we're started ok
+                this.ActionSemaphores[info.SemaphoreNumber].WaitOne(); // don't start until we're allowed to
+                this.ActionStarting = false; // let our creator know we're started ok
 
-            Action action = info.TheAction;
-            if (action != null)
-            {
-                logger.Trace("Triggering Action: {0} - {1} - {32", action.Name, action.produces, action.ToString());
-                action.Go(ref this.ActionPause, mStats);
+                Action action = info.TheAction;
+                if (action != null)
+                {
+                    logger.Trace("Triggering Action: {0} - {1} - {2}", action.Name, action.Produces, action.ToString());
+                    action.Go(ref this.ActionPause, mStats);
+                }
+
+
+                this.ActionSemaphores[info.SemaphoreNumber].Release(1);
             }
-                
-
-            this.ActionSemaphores[info.SemaphoreNumber].Release(1);
+            catch (Exception e)
+            {
+                logger.Fatal(e,"Unhandled Exception in Process Single Action");
+                return;
+            }
         }
 
-        public ActionQueue[] ActionProcessorMakeQueues(ScanListItemList theList)
+        public ActionQueue[] ActionProcessorMakeQueues(ItemList theList)
         {
             // Take a single list
             // Return an array of "ActionQueue" items.
@@ -1472,16 +1575,16 @@ namespace TVRename
             queues[2] = new ActionQueue("Write Metadata", 4); // writing KODI NFO files, etc.
             queues[3] = new ActionQueue("Download", TVSettings.Instance.ParallelDownloads); // downloading torrents, banners, thumbnails
 
-            foreach (ScanListItem sli in theList)
+            foreach (Item sli in theList)
             {
                 Action action = sli as Action;
 
                 if (action == null)
                     continue; // skip non-actions
 
-                if ((action is ActionWriteMetadata)) // base interface that all metadata actions are derived from
+                if ((action is ActionWriteMetadata) || (action is ActionDateTouch )) // base interface that all metadata actions are derived from
                     queues[2].Actions.Add(action);
-                else if ((action is ActionDownload) || (action is ActionRSS))
+                else if ((action is ActionDownloadImage) || (action is ActionRSS))
                     queues[3].Actions.Add(action);
                 else if (action is ActionCopyMoveRename)
                     queues[(action as ActionCopyMoveRename).QuickOperation() ? 1 : 0].Actions.Add(action);
@@ -1504,88 +1607,106 @@ namespace TVRename
 #if DEBUG
             System.Diagnostics.Debug.Assert(queuesIn is ActionQueue[]);
 #endif
-            ActionQueue[] queues = queuesIn as ActionQueue[];
-            if (queues == null)
-                return;
-
-            int N = queues.Length;
-
-            this.ActionWorkers = new List<Thread>();
-            this.ActionSemaphores = new Semaphore[N];
-
-            for (int i = 0; i < N; i++)
-            {
-                this.ActionSemaphores[i] = new Semaphore(queues[i].ParallelLimit, queues[i].ParallelLimit); // allow up to numWorkers working at once
-                logger.Info("Setting up '{0}' worker, with {1} threads in position {2}.", queues[i].Name, queues[i].ParallelLimit, i);
-            }
-                
-
             try
             {
-                for (; ; )
-                {
-                    while (this.ActionPause)
-                        Thread.Sleep(100);
+                ActionQueue[] queues = queuesIn as ActionQueue[];
 
-                    // look through the list of semaphores to see if there is one waiting for some work to do
-                    bool allDone = true;
-                    int which = -1;
-                    for (int i = 0; i < N; i++)
+                if (queues == null)
+                    return;
+
+                int N = queues.Length;
+
+                this.ActionWorkers = new List<Thread>();
+                this.ActionSemaphores = new Semaphore[N];
+
+                for (int i = 0; i < N; i++)
+                {
+                    this.ActionSemaphores[i] =
+                        new Semaphore(queues[i].ParallelLimit,
+                            queues[i].ParallelLimit); // allow up to numWorkers working at once
+                    logger.Info("Setting up '{0}' worker, with {1} threads in position {2}.", queues[i].Name,
+                        queues[i].ParallelLimit, i);
+                }
+
+
+                try
+                {
+                    for (;;)
                     {
-                        // something to do in this queue, and semaphore is available
-                        if (queues[i].ActionPosition < queues[i].Actions.Count)
+                        while (this.ActionPause)
+                            Thread.Sleep(100);
+
+                        // look through the list of semaphores to see if there is one waiting for some work to do
+                        bool allDone = true;
+                        int which = -1;
+                        for (int i = 0; i < N; i++)
                         {
-                            allDone = false;
-                            if (this.ActionSemaphores[i].WaitOne(20, false))
+                            // something to do in this queue, and semaphore is available
+                            if (queues[i].ActionPosition < queues[i].Actions.Count)
                             {
-                                which = i;
-                                break;
+                                allDone = false;
+                                if (this.ActionSemaphores[i].WaitOne(20, false))
+                                {
+                                    which = i;
+                                    break;
+                                }
                             }
                         }
-                    }
-                    if ((which == -1) && (allDone))
-                        break; // all done!
 
-                    if (which == -1)
-                        continue; // no semaphores available yet, try again for one
+                        if ((which == -1) && (allDone))
+                            break; // all done!
 
-                    ActionQueue Q = queues[which];
-                    Action act = Q.Actions[Q.ActionPosition++];
+                        if (which == -1)
+                            continue; // no semaphores available yet, try again for one
 
-                    if (act == null)
-                        continue;
+                        ActionQueue Q = queues[which];
+                        Action act = Q.Actions[Q.ActionPosition++];
 
-                    if (!act.Done)
-                    {
-                        Thread t = new Thread(this.ProcessSingleAction)
+                        if (act == null)
+                            continue;
+
+                        if (!act.Done)
                         {
-                            Name = "ProcessSingleAction(" + act.Name + ":" + act.ProgressText + ")"
-                        };
-                        this.ActionWorkers.Add(t);
-                        this.ActionStarting = true; // set to false in thread after it has the semaphore
-                        t.Start(new ProcessActionInfo(which, act));
+                            Thread t = new Thread(this.ProcessSingleAction)
+                            {
+                                Name = "ProcessSingleAction(" + act.Name + ":" + act.ProgressText + ")"
+                            };
+                            this.ActionWorkers.Add(t);
+                            this.ActionStarting = true; // set to false in thread after it has the semaphore
+                            t.Start(new ProcessActionInfo(which, act));
 
-                        int nfr = this.ActionSemaphores[which].Release(1); // release our hold on the semaphore, so that worker can grab it
-                        threadslogger.Trace("ActionProcessor[" + which + "] pool has " + nfr + " free");
+                            int nfr = this.ActionSemaphores[which]
+                                .Release(1); // release our hold on the semaphore, so that worker can grab it
+                            threadslogger.Trace("ActionProcessor[" + which + "] pool has " + nfr + " free");
+                        }
+
+                        while (this.ActionStarting) // wait for thread to get the semaphore
+                            Thread.Sleep(10); // allow the other thread a chance to run and grab
+
+                        // tidy up any finished workers
+                        for (int i = this.ActionWorkers.Count - 1; i >= 0; i--)
+                        {
+                            if (!this.ActionWorkers[i].IsAlive)
+                                this.ActionWorkers.RemoveAt(i); // remove dead worker
+                        }
                     }
 
-                    while (this.ActionStarting) // wait for thread to get the semaphore
-                        Thread.Sleep(10); // allow the other thread a chance to run and grab
-
-                    // tidy up any finished workers
-                    for (int i = this.ActionWorkers.Count - 1; i >= 0; i--)
-                    {
-                        if (!this.ActionWorkers[i].IsAlive)
-                            this.ActionWorkers.RemoveAt(i); // remove dead worker
-                    }
+                    this.WaitForAllActionThreadsAndTidyUp();
                 }
-                this.WaitForAllActionThreadsAndTidyUp();
+                catch (ThreadAbortException)
+                {
+                    foreach (Thread t in this.ActionWorkers)
+                        t.Abort();
+                    this.WaitForAllActionThreadsAndTidyUp();
+                }
             }
-            catch (ThreadAbortException)
+            catch (Exception e)
             {
+                logger.Fatal(e,"Unhandled Exception in ActionProcessor");
                 foreach (Thread t in this.ActionWorkers)
                     t.Abort();
                 this.WaitForAllActionThreadsAndTidyUp();
+                return;
             }
         }
 
@@ -1604,7 +1725,7 @@ namespace TVRename
             this.ActionSemaphores = null;
         }
 
-        public void DoActions(ScanListItemList theList)
+        public void DoActions(ItemList theList)
         {
             logger.Info("**********************");
             logger.Info("Doing Selected Actions....");
@@ -1634,9 +1755,9 @@ namespace TVRename
 
             this.ActionProcessorThread.Join();
 
-            theList.RemoveAll(x => (x is Action) && (x as Action).Done && !(x as Action).Error);
+            theList.RemoveAll(x => (x is Action) && ((Action) x).Done && !((Action) x).Error);
 
-                foreach (ScanListItem sli in theList)
+                foreach (Item sli in theList)
                 {
                     if (sli is Action) {
                         Action slia = (Action)sli;
@@ -1644,6 +1765,8 @@ namespace TVRename
                     }
                 }
 
+            logger.Info("Completed Selected Actions");
+            logger.Info("**************************");
 
         }
 
@@ -1666,8 +1789,7 @@ namespace TVRename
             if (!this.DoDownloadsFG())
                 return;
 
-            Thread ActionWork = new Thread(this.ScanWorker);
-            ActionWork.Name = "ActionWork";
+            Thread actionWork = new Thread(this.ScanWorker) {Name = "ActionWork"};
 
             this.ActionCancel = false;
             foreach (Finder f in Finders) { f.reset(); }
@@ -1682,16 +1804,16 @@ namespace TVRename
             else
                 this.ScanProgDlg = null;
 
-            ActionWork.Start(shows);
+            actionWork.Start(shows);
 
             if ((this.ScanProgDlg != null) && (this.ScanProgDlg.ShowDialog() == DialogResult.Cancel))
             {
                 this.ActionCancel = true;
-                ActionWork.Interrupt();
+                actionWork.Interrupt();
                 foreach (Finder f in Finders) { f.interrupt(); }
             }
             else
-                ActionWork.Join();
+                actionWork.Join();
 
             this.ScanProgDlg = null;
 
@@ -1703,23 +1825,30 @@ namespace TVRename
         public void doAllActions()
         {
 
-            ScanListItemList theList = new ScanListItemList();
+            ItemList theList = new ItemList();
 
             foreach (Item action in TheActionList)
             {
-                if (action is ScanListItem)
+                if (action is Item)
                 {
-                    theList.Add((ScanListItem)(action));
+                    theList.Add((Item)(action));
 
                 }
             }
 
             DoActions(theList);
         }
-        private void findDoubleEps()
+        protected internal List<PossibleDuplicateEpisode> findDoubleEps()
         {
             StringBuilder output = new StringBuilder();
+            List<PossibleDuplicateEpisode> returnValue = new List<PossibleDuplicateEpisode>();
 
+            output.AppendLine("");
+            output.AppendLine("##################################################");
+            output.AppendLine("DUPLICATE FINDER - Start");
+            output.AppendLine("##################################################");
+
+            DirFilesCache dfc = new DirFilesCache();
             foreach (ShowItem si in this.ShowItems)
             {
                 foreach (KeyValuePair<int, List<ProcessedEpisode>> kvp in si.SeasonEpisodes)
@@ -1737,19 +1866,103 @@ namespace TVRename
                     //Search through each pair of episodes for the same season
                     foreach (ProcessedEpisode pep in kvp.Value)
                     {
-                        foreach (ProcessedEpisode comparePep in kvp.Value)
+                        if (pep.type == ProcessedEpisode.ProcessedEpisodeType.merged)
                         {
-                            if (pep.FirstAired.HasValue && comparePep.FirstAired.HasValue && pep.FirstAired == comparePep.FirstAired && pep.EpisodeID < comparePep.EpisodeID)
+                            output.AppendLine(si.ShowName + " - Season: " + kvp.Key + " - " + pep.NumsAsString() +" - "+pep.Name+" is:");
+                            foreach (Episode sourceEpisode in pep.sourceEpisodes)
                             {
-                                output.AppendLine(si.ShowName + " - Season: " + kvp.Key + " - " + pep.FirstAired.ToString() + " - " + pep.EpNum + " - " + comparePep.EpNum);
+                                output.AppendLine("                      - " + sourceEpisode.AiredEpNum + " - " + sourceEpisode.Name);
+                            }
+                        }
+
+                    foreach (ProcessedEpisode comparePep in kvp.Value)
+                        {
+                            if (pep.FirstAired.HasValue && comparePep.FirstAired.HasValue &&
+                                pep.FirstAired == comparePep.FirstAired && pep.EpisodeID < comparePep.EpisodeID)
+                            {
+                                // Tell user about this possibility
+                                output.AppendLine(
+                                    $"{si.ShowName} - Season: {kvp.Key} - {pep.FirstAired.ToString()} - {pep.AiredEpNum}({pep.Name}) - {comparePep.AiredEpNum}({comparePep.Name})");
+
+                                //do the 'name' test
+                                string root = Helpers.GetCommonStartString(pep.Name, comparePep.Name);
+                                bool sameLength = (pep.Name.Length == comparePep.Name.Length);
+
+                                bool sameName = (!root.Trim().Equals("Episode") && sameLength && root.Length > 3 &&
+                                                 root.Length > pep.Name.Length / 2);
+                                bool oneFound = false;
+                                bool largerFileSize = false;
+
+                                if (sameName)
+                                {
+                                    output.AppendLine("####### POSSIBLE DUPLICATE DUE TO NAME##########");
+                                
+
+                                //Do the missing Test (ie is one missing and not the other)
+                                    bool pepFound = FindEpOnDisk(dfc, pep).Count > 0;
+                                    bool comparePepFound = FindEpOnDisk(dfc, comparePep).Count > 0;
+
+                                oneFound = (pepFound ^ comparePepFound);
+                                
+                                    if (oneFound)
+                                    {
+                                        output.AppendLine(
+                                            "####### POSSIBLE DUPLICATE DUE TO ONE MISSING AND ONE FOUND ##########");
+
+                                        ProcessedEpisode possibleDupEpisode = pepFound ? pep : comparePep;
+                                        //Test the file sizes in the season
+                                        //More than 40% longer
+                                        FileInfo possibleDupFile = FindEpOnDisk(dfc, possibleDupEpisode)[0];
+                                        int dupMovieLength = possibleDupFile.GetFilmLength();
+                                        System.Collections.Generic.List<int> otherMovieLengths =
+                                            new System.Collections.Generic.List<int>();
+
+                                        foreach (FileInfo file in possibleDupFile.Directory.EnumerateFiles())
+                                        {
+                                            if (TVSettings.Instance.UsefulExtension(file.Extension, false))
+                                            {
+                                                otherMovieLengths.Add(file.GetFilmLength());
+                                            }
+                                        }
+
+                                        int averageMovieLength =
+                                            (otherMovieLengths.Sum() - dupMovieLength) / (otherMovieLengths.Count - 1);
+
+                                        largerFileSize = (dupMovieLength > averageMovieLength * 1.4);
+
+                                        if (largerFileSize)
+                                        {
+
+                                            {
+                                                output.AppendLine(
+                                                    "######################################################################");
+                                                output.AppendLine(
+                                                    "####### SURELY WE HAVE ONE NOW                              ##########");
+                                                output.AppendLine(
+                                                    $"####### {possibleDupEpisode.AiredEpNum}({possibleDupEpisode.Name}) has length {dupMovieLength} greater than the average in the directory of {averageMovieLength}");
+                                                output.AppendLine(
+                                                    "######################################################################");
+                                            }
+                                        }
+                                    }
+                                }
+                                returnValue.Add(new PossibleDuplicateEpisode(pep, comparePep, kvp.Key, true, sameName, oneFound, largerFileSize));
                             }
                         }
                     }
                 }
+
+                
             }
-            
-           logger.Info(output.ToString());
+            output.AppendLine("##################################################");
+            output.AppendLine("DUPLICATE FINDER - End");
+            output.AppendLine("##################################################");
+
+            logger.Info(output.ToString());
+            return returnValue;
         }
+
+
         public void QuickScan() => QuickScan(true, true);
 
         public void QuickScan(bool doMissingRecents, bool doFilesInDownloadDir)
@@ -1943,7 +2156,7 @@ namespace TVRename
             ItemList toRemove = new ItemList();
             foreach (Item item in this.TheActionList)
             {
-                ScanListItem act = item as ScanListItem;
+                Item act = item as Item;
                 foreach (IgnoreItem ii in this.Ignore)
                 {
                     if (ii.SameFileAs(act.Ignore))
@@ -1991,16 +2204,10 @@ namespace TVRename
                 // all the folders for this particular season
                 List<string> folders = allFolders[snum];
 
-
-                List<ProcessedEpisode> eps = si.SeasonEpisodes[snum];
-
                 foreach (string folder in folders)
                 {
-
-
                     //Image series checks here
                     this.TheActionList.Add(DownloadIdentifiers.ForceUpdateSeason(DownloadIdentifier.DownloadType.downloadImage, si, folder, snum));
-
                 }
 
             } // for each season of this show
@@ -2020,6 +2227,12 @@ namespace TVRename
             //if so add show to list of files to be removed
 
             DirFilesCache dfc = new DirFilesCache();
+
+            //When doing a fullscan the showlist is null indicating that all shows should be checked
+            if (showList is null)
+            {
+                showList = this.ShowItems;
+            }
 
             foreach (String dirPath in SearchFolders)
             {
@@ -2056,14 +2269,12 @@ namespace TVRename
 
                         if (fileCanBeRemoved)
                         {
-                            int seasF;
-                            int epF;
-
                             ShowItem si = matchingShows[0];//Choose the first series
-                            TVDoc.FindSeasEp(fi, out seasF, out epF, si);
+                            TVDoc.FindSeasEp(fi, out int seasF, out int epF, out int maxEp, si, out FilenameProcessorRE rex);
                             SeriesInfo s = si.TheSeries();
-                            Episode ep = s.getEpisode(seasF, epF);
+                            Episode ep = s.getEpisode(seasF, epF, si.DVDOrder);
                             ProcessedEpisode pep = new ProcessedEpisode(ep, si);
+                            logger.Info($"Removing {fi.FullName } as it matches {matchingShows[0].ShowName} and no episodes are needed");
                             this.TheActionList.Add(new ActionDeleteFile(fi, pep, TVSettings.Instance.Tidyup));
                         }
 
@@ -2097,14 +2308,12 @@ namespace TVRename
 
                         if (dirCanBeRemoved)
                         {
-                            int seasF;
-                            int epF;
-
                             ShowItem si = matchingShows[0];//Choose the first series
-                            TVDoc.FindSeasEp(di, out seasF, out epF, si);
+                            TVDoc.FindSeasEp(di, out int seasF, out int epF, si, out FilenameProcessorRE rex);
                             SeriesInfo s = si.TheSeries();
-                            Episode ep = s.getEpisode(seasF, epF);
+                            Episode ep = s.getEpisode(seasF, epF, si.DVDOrder);
                             ProcessedEpisode pep = new ProcessedEpisode(ep, si);
+                            logger.Info($"Removing {di.FullName } as it matches {matchingShows[0].ShowName} and no episodes are needed");
                             this.TheActionList.Add(new ActionDeleteDirectory(di, pep, TVSettings.Instance.Tidyup));
                         }
 
@@ -2121,15 +2330,12 @@ namespace TVRename
 
         public bool fileNeeded(FileInfo fi, ShowItem si, DirFilesCache dfc)
         {
-            int seasF;
-            int epF;
-
-            if (TVDoc.FindSeasEp(fi, out seasF, out epF, si))
+            if (TVDoc.FindSeasEp(fi, out int seasF, out int epF, out int maxEp, si, out FilenameProcessorRE rex))
             {
                 SeriesInfo s = si.TheSeries();
                 try
                 {
-                    Episode ep = s.getEpisode(seasF, epF);
+                    Episode ep = s.getEpisode(seasF, epF, si.DVDOrder);
                     ProcessedEpisode pep = new ProcessedEpisode(ep, si);
 
                     if (FindEpOnDisk(dfc, si, pep).Count > 0)
@@ -2152,15 +2358,12 @@ namespace TVRename
 
         public bool fileNeeded(DirectoryInfo di, ShowItem si, DirFilesCache dfc)
         {
-            int seasF;
-            int epF;
-
-            if (TVDoc.FindSeasEp(di, out seasF, out epF, si))
+            if (TVDoc.FindSeasEp(di, out int seasF, out int epF, si, out FilenameProcessorRE rex))
             {
                 SeriesInfo s = si.TheSeries();
                 try
                 {
-                    Episode ep = s.getEpisode(seasF, epF);
+                    Episode ep = s.getEpisode(seasF, epF,si.DVDOrder);
                     ProcessedEpisode pep = new ProcessedEpisode(ep, si);
 
                     if (FindEpOnDisk(dfc, si, pep).Count > 0)
@@ -2189,8 +2392,6 @@ namespace TVRename
 
             this.LockShowItems();
 
-            if (showList == null)
-                showList = ShowItems;
 
             //foreach (ShowItem si in showlist)
             //  if (si.DoRename)
@@ -2204,8 +2405,13 @@ namespace TVRename
 
             prog.Invoke(0);
 
-            if (showList == null) // only do episode count if we're doing all shows and seasons
+            if (showList == null)
+            {
+                // only do episode count if we're doing all shows and seasons
                 this.mStats.NS_NumberOfEpisodes = 0;
+                showList = ShowItems;
+            }
+
 
             DirFilesCache dfc = new DirFilesCache();
             int c = 0;
@@ -2247,10 +2453,7 @@ namespace TVRename
                 si.SeasonEpisodes.Keys.CopyTo(numbers, 0);
                 Dictionary<int, List<string>> allFolders = si.AllFolderLocations();
 
-                int lastSeason = 0;
-                foreach (int n in numbers)
-                    if (n > lastSeason)
-                        lastSeason = n;
+                int lastSeason = numbers.Concat(new[] {0}).Max();
 
                 foreach (int snum in numbers)
                 {
@@ -2274,8 +2477,8 @@ namespace TVRename
                     int maxEpisodeNumber = 0;
                     foreach (ProcessedEpisode episode in eps)
                     {
-                        if (episode.EpNum > maxEpisodeNumber)
-                            maxEpisodeNumber = episode.EpNum;
+                        if (episode.AppropriateEpNum > maxEpisodeNumber)
+                            maxEpisodeNumber = episode.AppropriateEpNum;
                     }
 
 
@@ -2319,17 +2522,14 @@ namespace TVRename
                             if (this.ActionCancel)
                                 return;
 
-                            int seasNum;
-                            int epNum;
-
-                            if (!FindSeasEp(fi, out seasNum, out epNum, si))
+                            if (!FindSeasEp(fi, out int seasNum, out int epNum, out int maxEp, si, out FilenameProcessorRE rex))
                                 continue; // can't find season & episode, so this file is of no interest to us
 
                             if (seasNum == -1)
                                 seasNum = snum;
 
 #if !NOLAMBDA
-                            int epIdx = eps.FindIndex(x => ((x.EpNum == epNum) && (x.SeasonNumber == seasNum)));
+                            int epIdx = eps.FindIndex(x => ((x.AppropriateEpNum == epNum) && (x.AppropriateSeasonNumber == seasNum)));
                             if (epIdx == -1)
                                 continue; // season+episode number don't correspond to any episode we know of from thetvdb
                             ProcessedEpisode ep = eps[epIdx];
@@ -2361,7 +2561,7 @@ namespace TVRename
                                 if (newname != actualFile.Name)
                                 {
                                     actualFile = FileHelper.FileInFolder(folder, newname); // rename updates the filename
-                                    this.TheActionList.Add(new ActionCopyMoveRename(ActionCopyMoveRename.Op.Rename, fi, actualFile, ep, null));
+                                    this.TheActionList.Add(new ActionCopyMoveRename(ActionCopyMoveRename.Op.Rename, fi, actualFile, ep, null,null));
 
                                     //The following section informs the DownloadIdentifers that we already plan to
                                     //copy a file inthe appropriate place and they do not need to worry about downloading 
@@ -2390,7 +2590,7 @@ namespace TVRename
                             TheTVDB.Instance.GetLock("UpToDateCheck");
                             foreach (ProcessedEpisode dbep in eps)
                             {
-                                if ((dbep.EpNum > maxEpNumFound) || (localEps[dbep.EpNum] == null)) // not here locally
+                                if ((dbep.AppropriateEpNum  > maxEpNumFound) || (localEps[dbep.AppropriateEpNum] == null)) // not here locally
                                 {
                                     DateTime? dt = dbep.GetAirDateDT(true);
                                     bool dtOK = dt != null;
@@ -2425,7 +2625,7 @@ namespace TVRename
                                         (si.ForceCheckNoAirdate && !dtOK))
                                     {
                                         // then add it as officially missing
-                                        this.TheActionList.Add(new ItemMissing(dbep, folder + System.IO.Path.DirectorySeparatorChar + TVSettings.Instance.FilenameFriendly(TVSettings.Instance.NamingStyle.NameForExt(dbep, null, folder.Length))));
+                                        this.TheActionList.Add(new ItemMissing(dbep, folder, TVSettings.Instance.FilenameFriendly(TVSettings.Instance.NamingStyle.NameForExt(dbep, null, folder.Length))));
                                     }
                                 }
                                 else
@@ -2435,7 +2635,7 @@ namespace TVRename
                                         this.mStats.NS_NumberOfEpisodes++;
 
                                     // do NFO and thumbnail checks if required
-                                    FileInfo filo = localEps[dbep.EpNum]; // filename (or future filename) of the file
+                                    FileInfo filo = localEps[dbep.AppropriateEpNum ]; // filename (or future filename) of the file
 
                                     this.TheActionList.Add(DownloadIdentifiers.ProcessEpisode(dbep, filo));
 
@@ -2457,101 +2657,115 @@ namespace TVRename
 
         public void ScanWorker(Object o)
         {
-            List<ShowItem> specific = (List<ShowItem>)(o);
-
-            while (!this.Args.Hide && ((this.ScanProgDlg == null) || (!this.ScanProgDlg.Ready)))
-                Thread.Sleep(10); // wait for thread to create the dialog
-
-            this.TheActionList = new ItemList();
-            SetProgressDelegate noProgress = this.NoProgress;
-
-            if (TVSettings.Instance.RenameCheck || TVSettings.Instance.MissingCheck)
-                this.RenameAndMissingCheck(this.ScanProgDlg == null ? noProgress : this.ScanProgDlg.MediaLibProg, specific);
-
-            if (TVSettings.Instance.RemoveDownloadDirectoriesFiles)
-                this.FindUnusedFilesInDLDirectory(specific);
-
-            if (TVSettings.Instance.MissingCheck)
+            try
             {
-                // have a look around for any missing episodes
-                int activeLocalFinders = 0;
-                int activeRSSFinders = 0;
-                int activeDownloadingFinders = 0;
+                List<ShowItem> specific = (List<ShowItem>) (o);
 
-                foreach (Finder f in Finders)
+
+                while (!this.Args.Hide && ((this.ScanProgDlg == null) || (!this.ScanProgDlg.Ready)))
+                    Thread.Sleep(10); // wait for thread to create the dialog
+
+                this.TheActionList = new ItemList();
+                SetProgressDelegate noProgress = this.NoProgress;
+
+                if (TVSettings.Instance.RenameCheck || TVSettings.Instance.MissingCheck)
+                    this.RenameAndMissingCheck(this.ScanProgDlg == null ? noProgress : this.ScanProgDlg.MediaLibProg,
+                        specific);
+
+                if (TVSettings.Instance.RemoveDownloadDirectoriesFiles)
+                    this.FindUnusedFilesInDLDirectory(specific);
+
+                if (TVSettings.Instance.MissingCheck)
                 {
-                    if (f.Active())
-                    {
-                        f.setActionList(this.TheActionList);
+                    // have a look around for any missing episodes
+                    int activeLocalFinders = 0;
+                    int activeRSSFinders = 0;
+                    int activeDownloadingFinders = 0;
 
-                        switch (f.DisplayType())
+                    foreach (Finder f in Finders)
+                    {
+                        if (f.Active())
                         {
-                            case Finder.FinderDisplayType.Local:
-                                activeLocalFinders++;
-                                break;
-                            case Finder.FinderDisplayType.Downloading:
-                                activeDownloadingFinders++;
-                                break;
-                            case Finder.FinderDisplayType.RSS:
-                                activeRSSFinders++;
-                                break;
+                            f.setActionList(this.TheActionList);
+
+                            switch (f.DisplayType())
+                            {
+                                case Finder.FinderDisplayType.Local:
+                                    activeLocalFinders++;
+                                    break;
+                                case Finder.FinderDisplayType.Downloading:
+                                    activeDownloadingFinders++;
+                                    break;
+                                case Finder.FinderDisplayType.RSS:
+                                    activeRSSFinders++;
+                                    break;
+                            }
+                        }
+                    }
+
+                    int currentLocalFinderId = 0;
+                    int currentRSSFinderId = 0;
+                    int currentDownloadingFinderId = 0;
+
+                    foreach (Finder f in Finders)
+                    {
+                        if (this.ActionCancel)
+                        {
+                            return;
+                        }
+
+                        if (f.Active() && this.ListHasMissingItems(this.TheActionList))
+                        {
+
+                            int startPos = 0;
+                            int endpos = 0;
+
+                            switch (f.DisplayType())
+                            {
+                                case Finder.FinderDisplayType.Local:
+                                    currentLocalFinderId++;
+                                    startPos = 100 * (currentLocalFinderId - 1) / activeLocalFinders;
+                                    startPos = 100 * (currentLocalFinderId) / activeLocalFinders;
+                                    f.Check(this.ScanProgDlg == null ? noProgress : this.ScanProgDlg.LocalSearchProg,
+                                        startPos, endpos);
+                                    break;
+                                case Finder.FinderDisplayType.Downloading:
+                                    currentDownloadingFinderId++;
+                                    startPos = 100 * (currentDownloadingFinderId - 1) / activeDownloadingFinders;
+                                    startPos = 100 * (currentDownloadingFinderId) / activeDownloadingFinders;
+                                    f.Check(this.ScanProgDlg == null ? noProgress : this.ScanProgDlg.DownloadingProg,
+                                        startPos, endpos);
+                                    break;
+                                case Finder.FinderDisplayType.RSS:
+                                    currentRSSFinderId++;
+                                    startPos = 100 * (currentRSSFinderId - 1) / activeRSSFinders;
+                                    startPos = 100 * (currentRSSFinderId) / activeRSSFinders;
+                                    f.Check(this.ScanProgDlg == null ? noProgress : this.ScanProgDlg.RSSProg, startPos,
+                                        endpos);
+                                    break;
+                            }
+
+                            this.RemoveIgnored();
                         }
                     }
                 }
 
-                int currentLocalFinderId = 0;
-                int currentRSSFinderId = 0;
-                int currentDownloadingFinderId = 0;
+                if (this.ActionCancel)
+                    return;
 
-                foreach (Finder f in Finders)
-                {
-                    if (this.ActionCancel)
-                    {
-                        return;
-                    }
+                // sort Action list by type
+                this.TheActionList.Sort(new ActionItemSorter()); // was new ActionSorter()
 
-                    if (f.Active() && this.ListHasMissingItems(this.TheActionList))
-                    {
+                if (this.ScanProgDlg != null)
+                    this.ScanProgDlg.Done();
 
-                        int startPos = 0;
-                        int endpos = 0;
-
-                        switch (f.DisplayType())
-                        {
-                            case Finder.FinderDisplayType.Local:
-                                currentLocalFinderId++;
-                                startPos = 100 * (currentLocalFinderId - 1) / activeLocalFinders;
-                                startPos = 100 * (currentLocalFinderId) / activeLocalFinders;
-                                f.Check(this.ScanProgDlg == null ? noProgress : this.ScanProgDlg.LocalSearchProg, startPos, endpos);
-                                break;
-                            case Finder.FinderDisplayType.Downloading:
-                                currentDownloadingFinderId++;
-                                startPos = 100 * (currentDownloadingFinderId - 1) / activeDownloadingFinders;
-                                startPos = 100 * (currentDownloadingFinderId) / activeDownloadingFinders;
-                                f.Check(this.ScanProgDlg == null ? noProgress : this.ScanProgDlg.DownloadingProg, startPos, endpos);
-                                break;
-                            case Finder.FinderDisplayType.RSS:
-                                currentRSSFinderId++;
-                                startPos = 100 * (currentRSSFinderId - 1) / activeRSSFinders;
-                                startPos = 100 * (currentRSSFinderId) / activeRSSFinders;
-                                f.Check(this.ScanProgDlg == null ? noProgress : this.ScanProgDlg.RSSProg, startPos, endpos);
-                                break;
-                        }
-
-                        this.RemoveIgnored();
-                    }
-                }
+                this.Stats().FindAndOrganisesDone++;
             }
-            if (this.ActionCancel)
+            catch (Exception e)
+            {
+                logger.Fatal(e,"Unhandled Exception in ScanWorker");
                 return;
-
-            // sort Action list by type
-            this.TheActionList.Sort(new ActionItemSorter()); // was new ActionSorter()
-
-            if (this.ScanProgDlg != null)
-                this.ScanProgDlg.Done();
-
-            this.Stats().FindAndOrganisesDone++;
+            }
         }
 
         public static bool MatchesSequentialNumber(string filename, ref int seas, ref int ep, ProcessedEpisode pe)
@@ -2564,8 +2778,8 @@ namespace TVRename
             bool found = Regex.Match("X" + filename + "X", "[^0-9]0*" + num + "[^0-9]").Success; // need to pad to let it match non-numbers at start and end
             if (found)
             {
-                seas = pe.SeasonNumber;
-                ep = pe.EpNum;
+                seas = pe.AppropriateSeasonNumber;
+                ep = pe.AppropriateEpNum;
             }
             return found;
         }
@@ -2577,14 +2791,16 @@ namespace TVRename
             // would trigger the 1302 -> 13,02 matcher
             // Also, shows like "24" can cause confusion
 
+
+            //TODO: More replacement of non useful characters - MarkSummerville
             filename = filename.Replace(".", " "); // turn dots into spaces
 
-            if ((showNameHint == null) || (string.IsNullOrEmpty(showNameHint)))
+            if (string.IsNullOrEmpty(showNameHint))
                 return filename;
 
             bool nameIsNumber = (Regex.Match(showNameHint, "^[0-9]+$").Success);
 
-            int p = filename.IndexOf(showNameHint);
+            int p = filename.IndexOf(showNameHint, StringComparison.Ordinal);
 
             if (p == 0)
             {
@@ -2593,8 +2809,10 @@ namespace TVRename
             }
 
             if (nameIsNumber) // e.g. "24", or easy exact match of show name at start of filename
+            {
+                filename = filename.Remove(0, showNameHint.Length);
                 return filename;
-
+            }
             foreach (Match m in Regex.Matches(showNameHint, "(?:^|[^a-z]|\\b)([0-9]{3,})")) // find >= 3 digit numbers in show name
             {
                 if (m.Groups.Count > 1) // just in case
@@ -2607,12 +2825,13 @@ namespace TVRename
             return filename;
         }
 
-        private static bool FindSeasEpDateCheck(FileInfo fi, out int seas, out int ep, ShowItem si)
+        private static bool FindSeasEpDateCheck(FileInfo fi, out int seas, out int ep, out int maxEp, ShowItem si)
         {
             if (fi == null || si == null)
             {
                 seas = -1;
                 ep = -1;
+                maxEp = -1;
                 return false;
             }
 
@@ -2630,16 +2849,18 @@ namespace TVRename
 
             ep = -1;
             seas = -1;
+            maxEp = -1;
+            Dictionary<int, Season> seasonsToUse = si.DVDOrder ? ser.DVDSeasons : ser.AiredSeasons;
 
-            foreach (KeyValuePair<int, Season> kvp in ser.Seasons)
+            foreach (KeyValuePair<int, Season> kvp in seasonsToUse)
             {
                 if (si.IgnoreSeasons.Contains(kvp.Value.SeasonNumber))
                     continue;
 
                 foreach (Episode epi in kvp.Value.Episodes)
                 {
-                    DateTime? dt = epi.GetAirDateDT(false); // file will have local timezone date, not ours
-                    if ((dt == null) || (!dt.HasValue))
+                    DateTime? dt = epi.GetAirDateDT(); // file will have local timezone date, not ours
+                    if (dt == null)
                         continue;
 
                     TimeSpan closestDate = TimeSpan.MaxValue;
@@ -2647,14 +2868,13 @@ namespace TVRename
                     foreach (string dateFormat in dateFormats)
                     {
                         string datestr = dt.Value.ToString(dateFormat);
-                        DateTime dtInFilename;
-                        if (filename.Contains(datestr) && DateTime.TryParseExact(datestr, dateFormat, new CultureInfo("en-GB"), DateTimeStyles.None, out dtInFilename))
+                        if (filename.Contains(datestr) && DateTime.TryParseExact(datestr, dateFormat, new CultureInfo("en-GB"), DateTimeStyles.None, out DateTime dtInFilename))
                         {
                             TimeSpan timeAgo = DateTime.Now.Subtract(dtInFilename);
                             if (timeAgo < closestDate)
                             {
-                                seas = epi.SeasonNumber;
-                                ep = epi.EpNum;
+                                seas = (si.DVDOrder?epi.DVDSeasonNumber: epi.AiredSeasonNumber);
+                                ep = si.DVDOrder?epi.DVDEpNum: epi.AiredEpNum;
                                 closestDate = timeAgo;
                             }
                         }
@@ -2806,41 +3026,40 @@ namespace TVRename
             this.DoDownloadsFG();
         }
 
-        public static bool FindSeasEp(FileInfo fi, ShowItem si)
+
+        public static bool FindSeasEp(FileInfo fi, out int seas, out int ep, out int maxEp, ShowItem si, out FilenameProcessorRE re)
         {
-            int s;
-            int e;
-            return FindSeasEp(fi, out s, out e, si);
+            return TVDoc.FindSeasEp(fi, out seas, out ep, out maxEp, si, TVSettings.Instance.FNPRegexs, TVSettings.Instance.LookForDateInFilename, out re);
         }
 
-        public static bool FindSeasEp(FileInfo fi, out int seas, out int ep, ShowItem si)
-        {
-            return TVDoc.FindSeasEp(fi, out seas, out ep, si, TVSettings.Instance.FNPRegexs, TVSettings.Instance.LookForDateInFilename);
-        }
 
-        public static bool FindSeasEp(FileInfo fi, out int seas, out int ep, ShowItem si, List<FilenameProcessorRE> rexps, bool doDateCheck)
+
+        public static bool FindSeasEp(FileInfo fi, out int seas, out int ep, out int maxEp, ShowItem si, List<FilenameProcessorRE> rexps, bool doDateCheck,out FilenameProcessorRE re)
         {
+            re = null;
             if (fi == null)
             {
                 seas = -1;
                 ep = -1;
+                maxEp = -1;
                 return false;
             }
 
-            if (doDateCheck && FindSeasEpDateCheck(fi, out seas, out ep, si))
+            if (doDateCheck && FindSeasEpDateCheck(fi, out seas, out ep,out maxEp, si))
                 return true;
 
             string filename = fi.Name;
             int l = filename.Length;
             int le = fi.Extension.Length;
             filename = filename.Substring(0, l - le);
-            return FindSeasEp(fi.Directory.FullName, filename, out seas, out ep, si, rexps);
+            return FindSeasEp(fi.Directory.FullName, filename, out seas, out ep,out  maxEp ,si, rexps, out re);
         }
 
-        public static bool FindSeasEp(DirectoryInfo di, out int seas, out int ep, ShowItem si)
+        public static bool FindSeasEp(DirectoryInfo di, out int seas, out int ep, ShowItem si, out FilenameProcessorRE re)
         {
 
             List<FilenameProcessorRE> rexps = TVSettings.Instance.FNPRegexs;
+            re = null;
 
             if (di == null)
             {
@@ -2849,24 +3068,26 @@ namespace TVRename
                 return false;
             }
 
-            return FindSeasEp(di.Parent.FullName, di.Name, out seas, out ep, si, rexps);
+            return FindSeasEp(di.Parent.FullName, di.Name, out seas, out ep, out int maxEp, si, rexps, out re);
         }
 
 
-        public static bool FindSeasEp(string directory, string filename, out int seas, out int ep, ShowItem si, List<FilenameProcessorRE> rexps)
+        public static bool FindSeasEp(string directory, string filename, out int seas, out int ep, out int maxEp, ShowItem si, List<FilenameProcessorRE> rexps)
+        {
+            return TVDoc.FindSeasEp(directory, filename, out seas, out ep,  out maxEp, si,rexps, out FilenameProcessorRE rex);
+        }
+
+
+        public static bool FindSeasEp(string directory, string filename, out int seas, out int ep, out int maxEp, ShowItem si, List<FilenameProcessorRE> rexps, out FilenameProcessorRE rex)
         {
             string showNameHint = (si != null) ? si.ShowName : "";
-
+            maxEp = -1;
             seas = ep = -1;
+            rex = null;
 
             filename = SEFinderSimplifyFilename(filename, showNameHint);
 
             string fullPath = directory + System.IO.Path.DirectorySeparatorChar + filename; // construct full path with sanitised filename
-
-            if ((filename.Length > 256) || (fullPath.Length > 256))
-                return false;
-
-            int leftMostPos = filename.Length;
 
             filename = filename.ToLower() + " ";
             fullPath = fullPath.ToLower() + " ";
@@ -2882,16 +3103,15 @@ namespace TVRename
                     {
                         int adj = re.UseFullPath ? (fullPath.Length - filename.Length) : 0;
 
-                        int p = Math.Min(m.Groups["s"].Index, m.Groups["e"].Index) - adj;
-                        if (p >= leftMostPos)
-                            continue;
-
                         if (!int.TryParse(m.Groups["s"].ToString(), out seas))
                             seas = -1;
                         if (!int.TryParse(m.Groups["e"].ToString(), out ep))
                             ep = -1;
+                        if (!int.TryParse(m.Groups["f"].ToString(), out maxEp))
+                            maxEp = -1;
 
-                        leftMostPos = p;
+                        rex = re;
+                        if ((seas != -1) || (ep != -1))  return true;
                     }
                 }
                 catch (FormatException)
@@ -2969,6 +3189,237 @@ namespace TVRename
             }
             return shows;
         }
+
+        public UpdateVersion CheckForUpdates()
+        {
+            const string GITHUB_RELEASES_API_URL = "https://api.github.com/repos/TV-Rename/tvrename/releases";
+            UpdateVersion currentVersion;
+
+            System.Net.ServicePointManager.SecurityProtocol =  System.Net.SecurityProtocolType.Tls12;
+
+
+            try
+            {
+                string currentVersionString = Helpers.DisplayVersion;
+
+                bool inDebug = currentVersionString.EndsWith(" ** Debug Build **");
+                //remove debug stuff
+                if (inDebug)
+                    currentVersionString = currentVersionString.Substring(0,
+                        currentVersionString.LastIndexOf(" ** Debug Build **", StringComparison.Ordinal));
+
+                currentVersion =
+                    new UpdateVersion(currentVersionString, UpdateVersion.VersionType.Friendly);
+            }
+            catch (ArgumentException e)
+            {
+                logger.Error("Failed to establish if there are any new releases as could not parse internal version: "+ Helpers.DisplayVersion, e);
+                return null;
+
+            }
+
+            UpdateVersion latestVersion = null;
+            UpdateVersion latestBetaVersion = null;
+
+            try
+            {
+
+                WebClient client = new WebClient();
+                client.Headers.Add("user-agent",
+                    "Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36");
+                string response = client.DownloadString(GITHUB_RELEASES_API_URL);
+                JArray gitHubInfo = JArray.Parse(response);
+
+                foreach (JObject gitHubReleaseJSON in gitHubInfo.Children<JObject>())
+                {
+                    try
+                    {
+                        DateTime.TryParse(gitHubReleaseJSON["published_at"].ToString(), out DateTime releaseDate);
+                        UpdateVersion testVersion = new UpdateVersion(gitHubReleaseJSON["tag_name"].ToString(),
+                            UpdateVersion.VersionType.Semantic)
+                        {
+                            DownloadUrl = gitHubReleaseJSON["assets"][0]["browser_download_url"].ToString(),
+                            ReleaseNotesText = gitHubReleaseJSON["body"].ToString(),
+                            ReleaseNotesUrl = gitHubReleaseJSON["html_url"].ToString(),
+                            ReleaseDate = releaseDate,
+                            IsBeta = (gitHubReleaseJSON["prerelease"].ToString() == "True")
+                        };
+
+                        //all versions want to be considered if you are in the beta stream
+                        if (testVersion.NewerThan(latestBetaVersion)) latestBetaVersion = testVersion;
+
+                        //If the latest version is a production one then update the latest production version
+                        if (!testVersion.IsBeta)
+                        {
+                            if (testVersion.NewerThan(latestVersion)) latestVersion = testVersion;
+                        }
+                    }
+                    catch (NullReferenceException ex)
+                    {
+                        logger.Warn("Looks like the JSON payload from GitHub has changed");
+                        logger.Debug(ex, gitHubReleaseJSON.ToString());
+                        continue;
+                    }
+                    catch (ArgumentOutOfRangeException ex)
+                    {
+                        logger.Debug("Generally happens because the release did not have an exe attached");
+                        logger.Debug(ex, gitHubReleaseJSON.ToString());
+                        continue;
+                    }
+                    
+                }
+                if (latestVersion == null)
+                {
+                    logger.Error("Could not find latest version information from GitHub: {0}", response);
+                    return null;
+                }
+
+                if (latestBetaVersion == null)
+                {
+                    logger.Error("Could not find latest beta version information from GitHub: {0}", response);
+                    return null;
+                }
+
+            }
+            catch (Exception e)
+            {
+                logger.Error(e,"Failed to contact GitHub to identify new releases");
+                return null;
+
+            }
+
+
+
+        
+
+                if ((TVSettings.Instance.mode == TVSettings.BetaMode.ProductionOnly) &&
+                    (latestVersion.NewerThan( currentVersion))) return latestVersion;
+
+                if ((TVSettings.Instance.mode == TVSettings.BetaMode.BetaToo) &&
+                    (latestBetaVersion.NewerThan(currentVersion)))
+                    return latestBetaVersion;
+
+                return null;
+        }
+
+        private void ReleaseUnmanagedResources()
+        {
+            this.StopBGDownloadThread();
+        }
+
+        private void Dispose(bool disposing)
+        {
+            ReleaseUnmanagedResources();
+            if (disposing)
+            {
+                // ReSharper disable once UseNullPropagation
+                if (this.ScanProgDlg != null) this.ScanProgDlg.Dispose();
+                // ReSharper disable once UseNullPropagation
+                if (this.WorkerSemaphore != null) this.WorkerSemaphore.Dispose();
+            }
+        }
+
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        ~TVDoc()
+        {
+            Dispose(false);
+        }
     }
+
+    public class UpdateVersion :IComparable
+    {
+        public string DownloadUrl { get; set; }
+        public string ReleaseNotesText { get; set; }
+        public string ReleaseNotesUrl { get; set; }
+        public bool IsBeta { get; set; }
+        public DateTime ReleaseDate { get; set; }
+
+        public Version VersionNumber { get; }
+        public string Prerelease { get; }
+        public string Build { get;  }
+
+        public enum VersionType { Semantic,Friendly}
+
+            public  UpdateVersion(string version, VersionType  type)
+            {
+                if (string.IsNullOrWhiteSpace(version)) throw new ArgumentException("The provided version string is invalid.", nameof(version));
+
+                string matchString = (type == VersionType.Semantic)
+                    ? @"^(?<major>[0-9]+)((\.(?<minor>[0-9]+))(\.(?<patch>[0-9]+))?)?(\-(?<pre>[0-9A-Za-z\-\.]+|[*]))?(\+(?<build>[0-9A-Za-z\-\.]+|[*]))?$"
+                    : @"^(?<major>[0-9]+)((\.(?<minor>[0-9]+))(\.(?<patch>[0-9]+))?)?( (?<pre>[0-9A-Za-z\- \.]+))?$";
+
+                Regex regex = new Regex(matchString, RegexOptions.ExplicitCapture);
+                Match match = regex.Match(version);
+
+                if (!match.Success || !match.Groups["major"].Success || !match.Groups["minor"].Success) throw new ArgumentException("The provided version string is invalid.", nameof(version));
+                if (type == VersionType.Semantic &&   !match.Groups["patch"].Success) throw new ArgumentException("The provided version string is invalid semantic version.", nameof(version));
+
+                this.VersionNumber = new Version(int.Parse(match.Groups["major"].Value),
+                    int.Parse(match.Groups["minor"].Value),
+                    match.Groups["patch"].Success ? int.Parse(match.Groups["patch"].Value) : 0);
+
+                this.Prerelease = match.Groups["pre"].Value.Replace(" ", string.Empty);
+                this.Build = match.Groups["build"].Value?? string.Empty;
+            }
+
+        public int CompareTo(object obj)
+        {
+
+            if (obj == null) return 1;
+            if (!(obj is UpdateVersion otherUpdateVersion)) throw new ArgumentException("Object is not a UpdateVersion");
+
+                
+            //Returns 1 if this > object, 0 if this=object and -1 if this< object
+
+
+            //Extract Version Numbers and then compare them
+            if (this.VersionNumber.CompareTo(otherUpdateVersion.VersionNumber) != 0) return this.VersionNumber.CompareTo(otherUpdateVersion.VersionNumber);
+
+            //We have the same version - now we have to get tricky and look at the extension (rc1, beta2 etc)
+            //if both have no extension then they are the same
+            if (string.IsNullOrWhiteSpace(this.Prerelease) && string.IsNullOrWhiteSpace(otherUpdateVersion.Prerelease)) return 0;
+
+            //If either are not present then you can assume they are FINAL versions and trump any rx1 verisons
+            if (string.IsNullOrWhiteSpace( this.Prerelease) ) return 1;
+            if (string.IsNullOrWhiteSpace(otherUpdateVersion .Prerelease)) return -1;
+            
+            //We have 2 suffixes
+            //Compare alphabetically alpha1 < alpha2 < beta1 < beta2 < rc1 < rc2 etc
+            return (string.Compare(this.Prerelease , otherUpdateVersion.Prerelease , StringComparison.OrdinalIgnoreCase) );
+        }
+
+        public bool NewerThan(UpdateVersion compare) => (CompareTo(compare) > 0);
+
+        public override string ToString()
+        {
+            StringBuilder sb = new StringBuilder();
+            sb.Append(this.VersionNumber);
+            if (!string.IsNullOrWhiteSpace(this.Prerelease)) sb.Append("-" + this.Prerelease);
+            if (!string.IsNullOrWhiteSpace(this.Build)) sb.Append("-(" + this.Build+")");
+            return sb.ToString() ;
+        }
+
+        public string LogMessage()
+        {
+            StringBuilder sb = new StringBuilder();
+            sb.AppendLine("************************");
+            sb.AppendLine("**New Update Available**");
+            sb.AppendLine("************************");
+            sb.AppendLine($"A new verion is available: {ToString()} since {ReleaseDate}");
+            sb.AppendLine($"please download from {DownloadUrl}");
+            sb.AppendLine($"full notes available from {ReleaseNotesUrl}");
+            sb.AppendLine(ReleaseNotesText);
+            return sb.ToString();
+        }
+    }
+    
+
 }
+
+
 

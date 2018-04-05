@@ -1,6 +1,5 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
-using System.Text;
 using System.Xml;
 using System.Windows.Forms;
 using FileInfo = Alphaleonis.Win32.Filesystem.FileInfo;
@@ -12,9 +11,9 @@ namespace TVRename
         public UpcomingXML(TVDoc i) : base(i) { }
 
         public override bool Active()=> TVSettings.Instance.ExportWTWXML;
-        public override string Location() => TVSettings.Instance.ExportWTWXMLTo;
+        protected override string Location() => TVSettings.Instance.ExportWTWXMLTo;
 
-        protected override bool  generate(System.IO.Stream str, List<ProcessedEpisode> elist)
+        protected override bool  Generate(System.IO.Stream str, List<ProcessedEpisode> elist)
         {
             DirFilesCache dfc = new DirFilesCache();
             try
@@ -30,13 +29,12 @@ namespace TVRename
 
                     foreach (ProcessedEpisode ei in elist)
                     {
-                        string niceName = TVSettings.Instance.NamingStyle.NameForExt(ei, null, 0);
-
+                        
                         writer.WriteStartElement("item");
                         XMLHelper.WriteElementToXML(writer,"id",ei.TheSeries.TVDBCode);
                         XMLHelper.WriteElementToXML(writer,"SeriesName",ei.TheSeries.Name);
-                        XMLHelper.WriteElementToXML(writer,"SeasonNumber",Helpers.pad(ei.SeasonNumber));
-                        XMLHelper.WriteElementToXML(writer, "EpisodeNumber", Helpers.pad(ei.EpNum));
+                        XMLHelper.WriteElementToXML(writer,"SeasonNumber",Helpers.pad(ei.AppropriateSeasonNumber));
+                        XMLHelper.WriteElementToXML(writer, "EpisodeNumber", Helpers.pad(ei.AppropriateEpNum));
                         XMLHelper.WriteElementToXML(writer,"EpisodeName",ei.Name);
   
                         writer.WriteStartElement("available");
@@ -67,14 +65,13 @@ namespace TVRename
                     }
                     writer.WriteEndElement();
                     writer.WriteEndDocument();
-                    writer.Close();
                 }
                 return true;
             } // try
             catch (Exception e)
             {
                 if ((!this.mDoc.Args.Unattended) && (!this.mDoc.Args.Hide)) MessageBox.Show(e.Message);
-                logger.Error(e);
+                Logger.Error(e);
                 return false;
             }
 

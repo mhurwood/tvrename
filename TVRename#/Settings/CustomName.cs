@@ -1,9 +1,9 @@
 // 
 // Main website for TVRename is http://tvrename.com
 // 
-// Source code available at http://code.google.com/p/tvrename/
+// Source code available at https://github.com/TV-Rename/tvrename
 // 
-// This code is released under GPLv3 http://www.gnu.org/licenses/gpl.html
+// This code is released under GPLv3 https://github.com/TV-Rename/tvrename/blob/master/LICENSE.md
 // 
 using System;
 using System.Collections.Generic;
@@ -63,13 +63,13 @@ namespace TVRename
                                                             "{ShowName} - S{Season:2}{AllEpisodes} - {EpisodeName}"
                                                         };
 
-        public string NameForExt(ProcessedEpisode pe, string extension, int folderNameLength)
+        public string NameForExt(ProcessedEpisode pe, string extension = "", int folderNameLength=0)
         {
             // set folderNameLength to have the filename truncated if the total path length is too long
 
             string r = NameForNoExt(pe, this.StyleString);
 
-            int maxLenOK = 200 - (folderNameLength + ((extension != null) ? extension.Length : 0));
+            int maxLenOK = 200 - (folderNameLength + (extension?.Length ?? 0));
             if (r.Length > maxLenOK)
                 r = r.Substring(0, maxLenOK);
 
@@ -81,6 +81,68 @@ namespace TVRename
             }
             return r;
         }
+
+        public string GetTargetEpisodeName(Episode ep, string showname,TimeZone tz, bool dvdOrder,bool urlEncode = false )
+        {
+            //note this is for an Episode and not a ProcessedEpisode
+            String name = this.StyleString;
+            
+            string epname = ep.Name;
+
+            name = name.ReplaceInsensitive("{ShowName}", showname);
+            if (dvdOrder)
+            {
+                name = name.ReplaceInsensitive("{Season}", ep.DVDSeasonNumber.ToString());
+                name = name.ReplaceInsensitive("{Season:2}", ep.DVDSeasonNumber.ToString("00"));
+                name = name.ReplaceInsensitive("{Episode}", ep.DVDEpNum.ToString("00"));
+                name = name.ReplaceInsensitive("{Episode2}", ep.DVDEpNum.ToString("00"));
+                name = Regex.Replace(name, "{AllEpisodes}", ep.DVDEpNum.ToString("00"));
+
+            }
+            else
+            {
+                name = name.ReplaceInsensitive("{Season}", ep.AiredSeasonNumber.ToString());
+                name = name.ReplaceInsensitive("{Season:2}", ep.AiredSeasonNumber.ToString("00"));
+                name = name.ReplaceInsensitive("{Episode}", ep.AiredEpNum.ToString("00"));
+                name = name.ReplaceInsensitive("{Episode2}", ep.AiredEpNum.ToString("00"));
+                name = Regex.Replace(name, "{AllEpisodes}", ep.AiredEpNum.ToString("00"));
+
+            }
+            name = name.ReplaceInsensitive("{EpisodeName}", epname);
+            name = name.ReplaceInsensitive("{Number}", "");
+            name = name.ReplaceInsensitive("{Number:2}", "");
+            name = name.ReplaceInsensitive("{Number:3}", "");
+            DateTime? airdt = ep.GetAirDateDT(tz);
+            if (airdt != null)
+            {
+                DateTime dt = (DateTime)airdt;
+                name = name.ReplaceInsensitive("{ShortDate}", dt.ToString("d"));
+                name = name.ReplaceInsensitive("{LongDate}", dt.ToString("D"));
+                string ymd = dt.ToString("yyyy/MM/dd");
+                if (urlEncode)
+                    ymd = System.Web.HttpUtility.UrlEncode(ymd);
+                name = name.ReplaceInsensitive("{YMDDate}", ymd);
+            }
+            else
+            {
+                name = name.ReplaceInsensitive("{ShortDate}", "---");
+                name = name.ReplaceInsensitive("{LongDate}", "------");
+                string ymd = "----/--/--";
+                if (urlEncode)
+                    ymd = System.Web.HttpUtility.UrlEncode(ymd);
+                name = name.ReplaceInsensitive("{YMDDate}", ymd);
+            }
+
+            
+
+            name = Regex.Replace(name, "([^\\\\])\\[.*?[^\\\\]\\]", "$1"); // remove optional parts
+
+            name = name.Replace("\\[", "[");
+            name = name.Replace("\\]", "]");
+
+            return name.Trim();
+        }
+    
 
         public static readonly List<string> Tags = new List<String>
                        {
@@ -117,42 +179,42 @@ namespace TVRename
                 epname = System.Web.HttpUtility.UrlEncode(epname);
             }
 
-            name = name.Replace("{ShowName}", showname);
-            name = name.Replace("{Season}", pe.SeasonNumber.ToString());
-            name = name.Replace("{Season:2}", pe.SeasonNumber.ToString("00"));
-            name = name.Replace("{Episode}", pe.EpNum.ToString("00"));
-            name = name.Replace("{Episode2}", pe.EpNum2.ToString("00"));
-            name = name.Replace("{EpisodeName}", epname);
-            name = name.Replace("{Number}", pe.OverallNumber.ToString());
-            name = name.Replace("{Number:2}", pe.OverallNumber.ToString("00"));
-            name = name.Replace("{Number:3}", pe.OverallNumber.ToString("000"));
+            name = name.ReplaceInsensitive("{ShowName}", showname);
+            name = name.ReplaceInsensitive("{Season}", pe.AppropriateSeasonNumber.ToString());
+            name = name.ReplaceInsensitive("{Season:2}", pe.AppropriateSeasonNumber.ToString("00"));
+            name = name.ReplaceInsensitive("{Episode}", pe.AppropriateEpNum.ToString("00"));
+            name = name.ReplaceInsensitive("{Episode2}", pe.EpNum2.ToString("00"));
+            name = name.ReplaceInsensitive("{EpisodeName}", epname);
+            name = name.ReplaceInsensitive("{Number}", pe.OverallNumber.ToString());
+            name = name.ReplaceInsensitive("{Number:2}", pe.OverallNumber.ToString("00"));
+            name = name.ReplaceInsensitive("{Number:3}", pe.OverallNumber.ToString("000"));
             DateTime? airdt = pe.GetAirDateDT(false);
             if (airdt != null)
             {
                 DateTime dt = (DateTime) airdt;
-                name = name.Replace("{ShortDate}", dt.ToString("d"));
-                name = name.Replace("{LongDate}", dt.ToString("D"));
+                name = name.ReplaceInsensitive("{ShortDate}", dt.ToString("d"));
+                name = name.ReplaceInsensitive("{LongDate}", dt.ToString("D"));
                 string ymd = dt.ToString("yyyy/MM/dd");
                 if (urlEncode)
                     ymd = System.Web.HttpUtility.UrlEncode(ymd);
-                name = name.Replace("{YMDDate}", ymd);
+                name = name.ReplaceInsensitive("{YMDDate}", ymd);
             }
             else
             {
-                name = name.Replace("{ShortDate}", "---");
-                name = name.Replace("{LongDate}", "------");
+                name = name.ReplaceInsensitive("{ShortDate}", "---");
+                name = name.ReplaceInsensitive("{LongDate}", "------");
                 string ymd = "----/--/--";
                 if (urlEncode)
                     ymd = System.Web.HttpUtility.UrlEncode(ymd);
-                name = name.Replace("{YMDDate}", ymd);
+                name = name.ReplaceInsensitive("{YMDDate}", ymd);
             }
 
             String allEps = "";
-            for (int i = pe.EpNum; i <= pe.EpNum2; i++)
+            for (int i = pe.AppropriateEpNum ; i <= pe.EpNum2; i++)
                 allEps += "E" + i.ToString("00");
-            name = Regex.Replace(name, "{AllEpisodes}", allEps);
+            name = Regex.Replace(name, "{AllEpisodes}", allEps,RegexOptions.IgnoreCase);
 
-            if (pe.EpNum2 == pe.EpNum)
+            if (pe.EpNum2 == pe.AppropriateEpNum)
                 name = Regex.Replace(name, "([^\\\\])\\[.*?[^\\\\]\\]", "$1"); // remove optional parts
             else
                 name = Regex.Replace(name, "([^\\\\])\\[(.*?[^\\\\])\\]", "$1$2"); // remove just the brackets

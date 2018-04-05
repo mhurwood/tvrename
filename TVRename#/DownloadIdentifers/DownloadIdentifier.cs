@@ -1,14 +1,10 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
 using FileInfo = Alphaleonis.Win32.Filesystem.FileInfo;
 
 namespace TVRename
 {
     abstract class DownloadIdentifier
     {
-        
-        public DownloadIdentifier()
+        protected DownloadIdentifier()
         {
             
         }
@@ -54,6 +50,6 @@ namespace TVRename
         {
         }
 
-        public virtual void reset() { }
+        public abstract void reset();
     }
 }

@@ -1,13 +1,13 @@
 // 
 // Main website for TVRename is http://tvrename.com
 // 
-// Source code available at http://code.google.com/p/tvrename/
+// Source code available at https://github.com/TV-Rename/tvrename
 // 
-// This code is released under GPLv3 http://www.gnu.org/licenses/gpl.html
+// This code is released under GPLv3 https://github.com/TV-Rename/tvrename/blob/master/LICENSE.md
 // 
 namespace TVRename
 {
-    // "FolderMonitorItem" represents a folder found by doing a Check in the Folder monitor dialog
+    // "FolderMonitorItem" represents a folder found by doing a Check in the 'Bulk Add Shows' dialog
     public class FolderMonitorEntry
     {
         public string Folder;

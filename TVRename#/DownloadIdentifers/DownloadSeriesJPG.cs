@@ -1,11 +1,9 @@
-﻿using System;
 using System.Collections.Generic;
-using System.Text;
 using FileInfo = Alphaleonis.Win32.Filesystem.FileInfo;
 
 namespace TVRename
 {
-    class DownloadSeriesJPG : DownloadIdentifier
+    sealed class DownloadSeriesJPG : DownloadIdentifier
     {
         private List<string> doneJPG;
         private const string defaultFileName = "series.jpg";
@@ -30,7 +28,7 @@ namespace TVRename
                 {
                     string bannerPath = si.TheSeries().GetSeasonBannerPath(snum);
                     if (!string.IsNullOrEmpty(bannerPath))
-                        TheActionList.Add(new ActionDownload(si, null, fi, bannerPath, TVSettings.Instance.ShrinkLargeMede8erImages));
+                        TheActionList.Add(new ActionDownloadImage(si, null, fi, bannerPath, TVSettings.Instance.ShrinkLargeMede8erImages));
                     doneJPG.Add(fi.FullName);
                 }
                 return TheActionList;
@@ -43,7 +41,6 @@ namespace TVRename
         public override void reset()
         {
             doneJPG  = new List<string>();
-            base.reset();
         }
     }
 

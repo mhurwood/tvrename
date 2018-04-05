@@ -1,9 +1,9 @@
 // 
 // Main website for TVRename is http://tvrename.com
 // 
-// Source code available at http://code.google.com/p/tvrename/
+// Source code available at https://github.com/TV-Rename/tvrename
 // 
-// This code is released under GPLv3 http://www.gnu.org/licenses/gpl.html
+// This code is released under GPLv3 https://github.com/TV-Rename/tvrename/blob/master/LICENSE.md
 // 
 using System;
 using System.Text.RegularExpressions;
@@ -15,6 +15,7 @@ using System.Collections.Generic;
 
 namespace TVRename
 {
+    /// <inheritdoc />
     /// <summary>
     /// Summary for TheTVDBCodeFinder
     /// </summary>
@@ -45,7 +46,9 @@ namespace TVRename
             this.mInternal = true;
             this.txtFindThis.Text = s;
             this.mInternal = false;
+            Search();
             this.DoFind(true);
+            
         }
 
         public int SelectedCode()
@@ -55,7 +58,7 @@ namespace TVRename
                 if (this.lvMatches.SelectedItems.Count == 0)
                     return int.Parse(this.txtFindThis.Text);
 
-                return (int) (this.lvMatches.SelectedItems[0].Tag);
+                return (int.Parse(this.lvMatches.SelectedItems[0].SubItems[0].Text));
             }
             catch
             {
@@ -63,6 +66,19 @@ namespace TVRename
             }
         }
 
+        public SeriesInfo SelectedShow()
+        {
+            try
+            {
+                if (this.lvMatches.SelectedItems.Count == 0) return null;
+
+                return ((SeriesInfo)(this.lvMatches.SelectedItems[0].Tag));
+            }
+            catch
+            {
+                return null;
+            }
+        }
         private void txtFindThis_TextChanged(object sender, EventArgs e)
         {
             if (!this.mInternal)
@@ -105,20 +121,21 @@ namespace TVRename
                     int num = kvp.Key;
                     string show = kvp.Value.Name;
                     show = Helpers.RemoveDiacritics(show);
-                    string s = num + " " + show;
+                    string s = num + " " + show.Replace(".", " "); 
 
                     string simpleS = Regex.Replace(s.ToLower(), "[^\\w ]", "");
 
                     bool numberMatch = numeric && num == matchnum;
-
-                    if (numberMatch || (!numeric && (simpleS.Contains(Regex.Replace(what, "[^\\w ]", "")))) || (numeric && show.Contains(what)))
+                    string searchTerm = Regex.Replace(what, "[^\\w ]", "");
+                    searchTerm = searchTerm.Trim();
+                    if (numberMatch || (!numeric && (simpleS.Contains(searchTerm))) || (numeric && show.Contains(what)))
                     {
                         ListViewItem lvi = new ListViewItem();
                         lvi.Text = num.ToString();
                         lvi.SubItems.Add(show);
                         lvi.SubItems.Add(kvp.Value.FirstAired != null ? kvp.Value.FirstAired.Value.Year.ToString() : "");
 
-                        lvi.Tag = num;
+                        lvi.Tag = kvp.Value;
                         if (numberMatch)
                             lvi.Selected = true;
                         this.lvMatches.Items.Add(lvi);
@@ -142,6 +159,11 @@ namespace TVRename
         }
 
         private void bnGoSearch_Click(object sender, EventArgs e)
+        {
+            Search();
+        }
+
+        private void Search()
         {
             // search on thetvdb.com site
             this.txtSearchStatus.Text = "Searching on TheTVDB.com";

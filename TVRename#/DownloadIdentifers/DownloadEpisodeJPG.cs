@@ -1,6 +1,4 @@
-﻿using System;
 using System.Collections.Generic;
-using System.Text;
 using FileInfo = Alphaleonis.Win32.Filesystem.FileInfo;
 
 
@@ -13,7 +11,7 @@ namespace TVRename
 
         public DownloadEpisodeJPG() 
         {
-            reset();
+            this.reset();
         }
 
         public override DownloadType GetDownloadType()
@@ -29,13 +27,12 @@ namespace TVRename
                 string ban = dbep.GetFilename();
                 if (!string.IsNullOrEmpty(ban))
                 {
-                    string basefn = filo.Name;
-                    basefn = basefn.Substring(0, basefn.Length - filo.Extension.Length); //remove extension
+                    string basefn = filo.RemoveExtension();
 
                     FileInfo imgjpg = FileHelper.FileInFolder(filo.Directory, basefn + ".jpg");
 
                     if (forceRefresh || !imgjpg.Exists)
-                        TheActionList.Add(new ActionDownload(dbep.SI, dbep, imgjpg, ban, TVSettings.Instance.ShrinkLargeMede8erImages));
+                        TheActionList.Add(new ActionDownloadImage(dbep.SI, dbep, imgjpg, ban, TVSettings.Instance.ShrinkLargeMede8erImages));
                 }
 
                 return TheActionList;
@@ -45,10 +42,9 @@ namespace TVRename
             return base.ProcessEpisode(dbep, filo, forceRefresh);
         }
 
-        public override void reset()
+        public sealed override void reset()
         {
             doneJPG = new List<string>();
-            base.reset();
         }
     }
 

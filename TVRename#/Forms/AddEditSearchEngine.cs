@@ -1,9 +1,9 @@
 // 
 // Main website for TVRename is http://tvrename.com
 // 
-// Source code available at http://code.google.com/p/tvrename/
+// Source code available at https://github.com/TV-Rename/tvrename
 // 
-// This code is released under GPLv3 http://www.gnu.org/licenses/gpl.html
+// This code is released under GPLv3 https://github.com/TV-Rename/tvrename/blob/master/LICENSE.md
 // 
 using System.Windows.Forms;
 using System.Drawing;
@@ -96,14 +96,9 @@ namespace TVRename
             this.Grid1[r, 1] = new SourceGrid.Cells.Cell("", typeof(string));
         }
 
-        /// <summary>
-        /// Clean up any resources being used.
-        /// </summary>
-        ~AddEditSearchEngine()
-        {
-            if (this.Cntfw != null)
-                this.Cntfw.Close();
-        }
+
+
+
 
         private void bnAdd_Click(object sender, System.EventArgs e)
         {

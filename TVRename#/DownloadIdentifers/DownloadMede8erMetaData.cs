@@ -1,17 +1,13 @@
-﻿using System;
 using System.Collections.Generic;
-using System.Text;
-using FileSystemInfo = Alphaleonis.Win32.Filesystem.FileSystemInfo;
-using Directory = Alphaleonis.Win32.Filesystem.Directory;
-using DirectoryInfo = Alphaleonis.Win32.Filesystem.DirectoryInfo;
 using FileInfo = Alphaleonis.Win32.Filesystem.FileInfo;
 
 namespace TVRename
 {
+    // ReSharper disable once InconsistentNaming
     class DownloadMede8erMetaData : DownloadIdentifier
     {
-
-        public DownloadMede8erMetaData() 
+        private List<string> doneFiles;
+        public DownloadMede8erMetaData()
         {
             reset();
         }
@@ -21,7 +17,7 @@ namespace TVRename
             return DownloadType.downloadMetaData;
         }
 
-        public override ItemList ProcessShow(ShowItem si,bool forceRefresh)
+        public override ItemList ProcessShow(ShowItem si, bool forceRefresh)
         {
             if (TVSettings.Instance.Mede8erXML)
             {
@@ -32,12 +28,20 @@ namespace TVRename
                 bool needUpdate = !tvshowxml.Exists ||
                                   (si.TheSeries().Srv_LastUpdated > TimeZone.Epoch(tvshowxml.LastWriteTime));
 
-                if (forceRefresh || needUpdate)
+                if ((forceRefresh || needUpdate) && (!this.doneFiles.Contains(tvshowxml.FullName)))
+                {
+                    this.doneFiles.Add(tvshowxml.FullName);
                     TheActionList.Add(new ActionMede8erXML(tvshowxml, si));
+                }
+
 
                 //Updates requested by zakwaan@gmail.com on 18/4/2013
-                FileInfo viewxml = FileHelper.FileInFolder(si.AutoAdd_FolderBase, "view.xml");
-                if (!viewxml.Exists) TheActionList.Add(new ActionMede8erViewXML(viewxml,si));
+                FileInfo viewxml = FileHelper.FileInFolder(si.AutoAdd_FolderBase, "View.xml");
+                if ((!viewxml.Exists) && (!this.doneFiles.Contains(viewxml.FullName)))
+                {
+                    this.doneFiles.Add(viewxml.FullName);
+                    TheActionList.Add(new ActionMede8erViewXML(viewxml, si));
+                }
 
 
                 return TheActionList;
@@ -53,8 +57,8 @@ namespace TVRename
                 ItemList TheActionList = new ItemList();
 
                 //Updates requested by zakwaan@gmail.com on 18/4/2013
-                FileInfo viewxml = FileHelper.FileInFolder(folder, "view.xml");
-                if (!viewxml.Exists) TheActionList.Add(new ActionMede8erViewXML(viewxml,si,snum));
+                FileInfo viewxml = FileHelper.FileInFolder(folder, "View.xml");
+                if (!viewxml.Exists) TheActionList.Add(new ActionMede8erViewXML(viewxml, si, snum));
 
 
                 return TheActionList;
@@ -68,9 +72,7 @@ namespace TVRename
             if (TVSettings.Instance.Mede8erXML)
             {
                 ItemList TheActionList = new ItemList();
-                string fn = filo.Name;
-                fn = fn.Substring(0, fn.Length - filo.Extension.Length);
-                fn += ".xml";
+                string fn = filo.RemoveExtension() + ".xml";
                 FileInfo nfo = FileHelper.FileInFolder(filo.Directory, fn);
 
                 if (forceRefresh || !nfo.Exists || (dbep.Srv_LastUpdated > TimeZone.Epoch(nfo.LastWriteTime)))
@@ -82,9 +84,9 @@ namespace TVRename
             return base.ProcessEpisode(dbep, filo, forceRefresh);
         }
 
-        public override void reset()
+        public sealed override void reset()
         {
-           base.reset();
+            this.doneFiles = new List<string>();
         }
 
     }

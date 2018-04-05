@@ -1,16 +1,15 @@
-﻿// 
+// 
 // Main website for TVRename is http://tvrename.com
 // 
-// Source code available at http://code.google.com/p/tvrename/
+// Source code available at https://github.com/TV-Rename/tvrename
 // 
-// This code is released under GPLv3 http://www.gnu.org/licenses/gpl.htmlr
+// This code is released under GPLv3 https://github.com/TV-Rename/tvrename/blob/master/LICENSE.mdr
 //
 // For more information see http://thetvdb.com/wiki/index.php/API:banners.xml
 //  
 
 using Newtonsoft.Json.Linq;
 using System;
-using System.Windows.Forms;
 using System.Xml;
 
 namespace TVRename
@@ -161,7 +160,7 @@ namespace TVRename
             this.BannerPath = (string)json["fileName"];
             this.BannerId = (int)json["id"];
             this.BannerType = (string)json["keyType"];
-            this.LanguageId = LangId;//(json["languageId"] == null) ? -1 : (int)json["languageId"];
+            this.LanguageId = (json["languageId"] == null) ? LangId  : (int)json["languageId"];
             
             double.TryParse((string)(json["ratingsInfo"]["average"]), out this.Rating);
             this.RatingCount = (int)(json["ratingsInfo"]["count"]);
@@ -212,7 +211,7 @@ namespace TVRename
             return ((this.BannerType == "fanart") );
         }
 
-        public void SetDefaults(SeriesInfo ser, Season seas)
+        private void SetDefaults(SeriesInfo ser, Season seas)
         {
             this.TheSeason = seas;
             this.TheSeries = ser;

@@ -1,6 +1,3 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
 using FileInfo = Alphaleonis.Win32.Filesystem.FileInfo;
 
 namespace TVRename
@@ -38,9 +35,8 @@ namespace TVRename
             return base.ProcessEpisode(dbep, filo, forceRefresh);
         }
 
-        public override void reset()
+        public sealed override void reset()
         {
-            base.reset();
         }
 
     }

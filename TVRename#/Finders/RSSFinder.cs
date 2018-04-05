@@ -1,7 +1,5 @@
-﻿using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml;
 
@@ -52,7 +50,7 @@ namespace TVRename
 
                 foreach (RSSItem rss in RSSList)
                 {
-                    if ((FileHelper.SimplifyAndCheckFilename(rss.ShowName, simpleShowName, true, false) || (string.IsNullOrEmpty(rss.ShowName) && FileHelper.SimplifyAndCheckFilename(rss.Title, simpleSeriesName, true, false))) && (rss.Season == pe.SeasonNumber) && (rss.Episode == pe.EpNum))
+                    if ((FileHelper.SimplifyAndCheckFilename(rss.ShowName, simpleShowName, true, false) || (string.IsNullOrEmpty(rss.ShowName) && FileHelper.SimplifyAndCheckFilename(rss.Title, simpleSeriesName, true, false))) && (rss.Season == pe.AppropriateSeasonNumber) && (rss.Episode == pe.AppropriateEpNum ))
                     {
                         newItems.Add(new ActionRSS(rss, Action.TheFileNoExt, pe));
                         toRemove.Add(Action1);
@@ -108,35 +106,35 @@ namespace TVRename
                     IgnoreComments = true,
                     IgnoreWhitespace = true
                 };
-                XmlReader reader = XmlReader.Create(ms, settings);
-
-                reader.Read();
-                if (reader.Name != "xml")
-                    return false;
-
-                reader.Read();
-
-                if (reader.Name != "rss")
-                    return false;
-
-                reader.Read();
-
-                while (!reader.EOF)
+                using (XmlReader reader = XmlReader.Create(ms, settings))
                 {
-                    if ((reader.Name == "rss") && (!reader.IsStartElement()))
-                        break;
 
-                    if (reader.Name == "channel")
+                    reader.Read();
+                    if (reader.Name != "xml")
+                        return false;
+
+                    reader.Read();
+
+                    if (reader.Name != "rss")
+                        return false;
+
+                    reader.Read();
+
+                    while (!reader.EOF)
                     {
-                        if (!this.ReadChannel(reader.ReadSubtree()))
-                            return false;
-                        reader.Read();
-                    }
-                    else
-                        reader.ReadOuterXml();
-                }
+                        if ((reader.Name == "rss") && (!reader.IsStartElement()))
+                            break;
 
-                ms.Close();
+                        if (reader.Name == "channel")
+                        {
+                            if (!this.ReadChannel(reader.ReadSubtree()))
+                                return false;
+                            reader.Read();
+                        }
+                        else
+                            reader.ReadOuterXml();
+                    }
+                }
             }
             catch
             {
@@ -199,11 +197,9 @@ namespace TVRename
             if ((string.IsNullOrEmpty(title)) || (string.IsNullOrEmpty(link)))
                 return false;
 
-            int season = -1;
-            int episode = -1;
             string showName = "";
 
-            TVDoc.FindSeasEp("", title, out season, out episode, null, this.Rexps);
+            TVDoc.FindSeasEp("", title, out int season, out int episode, out int maxEp, null, this.Rexps);
 
             try
             {

@@ -1,6 +1,4 @@
-﻿using System;
 using System.Collections.Generic;
-using System.Text;
 using FileInfo = Alphaleonis.Win32.Filesystem.FileInfo;
 
 namespace TVRename
@@ -34,7 +32,7 @@ namespace TVRename
                     string bannerPath = si.TheSeries().GetSeriesFanartPath();
 
                     if (!string.IsNullOrEmpty(bannerPath))
-                        TheActionList.Add(new ActionDownload(si, null, fi, bannerPath, false));
+                        TheActionList.Add(new ActionDownloadImage(si, null, fi, bannerPath, false));
                     doneFanartJPG.Add(fi.FullName);
                 }
                 return TheActionList;
@@ -43,10 +41,9 @@ namespace TVRename
             return base.ProcessShow(si, forceRefresh);
         }
 
-        public override void reset()
+        public sealed override void reset()
         {
             doneFanartJPG = new List<string>(); 
-            base.reset();
         }
 
     }

@@ -1,12 +1,5 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
+using System;
 using System.Net;
-using System.Windows.Forms;
-using Alphaleonis.Win32.Filesystem;
-using FileSystemInfo = Alphaleonis.Win32.Filesystem.FileSystemInfo;
-using Directory = Alphaleonis.Win32.Filesystem.Directory;
-using DirectoryInfo = Alphaleonis.Win32.Filesystem.DirectoryInfo;
 using FileInfo = Alphaleonis.Win32.Filesystem.FileInfo;
 
 
@@ -31,7 +24,7 @@ namespace TVRename
 
         public override void Check(SetProgressDelegate prog, int startpct, int totPct)
         {
-            if (String.IsNullOrEmpty(TVSettings.Instance.SABAPIKey) || String.IsNullOrEmpty(TVSettings.Instance.SABHostPort))
+            if (string.IsNullOrEmpty(TVSettings.Instance.SABAPIKey) || String.IsNullOrEmpty(TVSettings.Instance.SABHostPort))
             {
                 prog.Invoke(startpct + totPct);
                 return;
@@ -41,7 +34,7 @@ namespace TVRename
 
             // Something like:
             // http://localhost:8080/sabnzbd/api?mode=queue&apikey=xxx&start=0&limit=8888&output=xml
-            String theURL = "http://" + TVSettings.Instance.SABHostPort +
+            string theURL = "http://" + TVSettings.Instance.SABHostPort +
                             "/sabnzbd/api?mode=queue&start=0&limit=8888&output=xml&apikey=" + TVSettings.Instance.SABAPIKey;
 
             WebClient wc = new WebClient();
@@ -52,6 +45,7 @@ namespace TVRename
             }
             catch (WebException)
             {
+                logger.Warn("Failed to obtain SABnzbd, please recheck settings: " + theURL);
             }
 
             if (r == null)
@@ -88,7 +82,7 @@ namespace TVRename
             }
 
             System.Diagnostics.Debug.Assert(sq != null); // shouldn't happen
-            if (sq == null || sq.slots == null || sq.slots.Length == 0) // empty queue
+            if (sq?.slots == null || sq.slots.Length == 0) // empty queue
                 return;
 
             ItemList newList = new ItemList();
@@ -119,18 +113,12 @@ namespace TVRename
                         //if (!TVSettings.Instance.UsefulExtension(file.Extension, false)) // not a usefile file extension
                         //    continue;
 
-                        if (FileHelper.SimplifyAndCheckFilename(file.FullName, showname, true, false))
-                        {
-                            int seasF;
-                            int epF;
-                            if (TVDoc.FindSeasEp(file, out seasF, out epF, Action.Episode.SI) &&
-                                (seasF == Action.Episode.SeasonNumber) && (epF == Action.Episode.EpNum))
-                            {
-                                toRemove.Add(Action1);
-                                newList.Add(new ItemSABnzbd(te, Action.Episode, Action.TheFileNoExt));
-                                break;
-                            }
-                        }
+                        if (!FileHelper.SimplifyAndCheckFilename(file.FullName, showname, true, false)) continue;
+                        if (!TVDoc.FindSeasEp(file, out int seasF, out int epF, out int maxEp, Action.Episode.SI) ||
+                            (seasF != Action.Episode.AppropriateSeasonNumber) || (epF != Action.Episode.AppropriateEpNum )) continue;
+                        toRemove.Add(Action1);
+                        newList.Add(new ItemSABnzbd(te, Action.Episode, Action.TheFileNoExt));
+                        break;
                     }
                 }
             }

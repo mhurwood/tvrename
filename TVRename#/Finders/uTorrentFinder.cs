@@ -1,6 +1,5 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
-using System.Text;
 using Alphaleonis.Win32.Filesystem;
 using FileInfo = Alphaleonis.Win32.Filesystem.FileInfo;
 using System.Linq;
@@ -62,18 +61,15 @@ namespace TVRename
                     //do any of the possible names for the series match the filename?
                     Boolean matched = (Action.Episode.SI.getSimplifiedPossibleShowNames().Any(name => FileHelper.SimplifyAndCheckFilename(file.FullName, name)));
 
-                    if (matched) 
+                    if (!matched) continue;
+
+                    if (TVDoc.FindSeasEp(file, out int seasF, out int epF, out int maxEp, Action.Episode.SI) && (seasF == Action.Episode.AppropriateSeasonNumber) && (epF == Action.Episode.AppropriateEpNum))
                     {
-                        int seasF;
-                        int epF;
-                        if (TVDoc.FindSeasEp(file, out seasF, out epF, Action.Episode.SI) && (seasF == Action.Episode.SeasonNumber) && (epF == Action.Episode.EpNum))
-                        {
-                            toRemove.Add(Action1);
-                            newList.Add(new ItemuTorrenting(te, Action.Episode, Action.TheFileNoExt));
-                            break;
-                        }
+                        toRemove.Add(Action1);
+                        newList.Add(new ItemuTorrenting(te, Action.Episode, Action.TheFileNoExt));
+                        break;
                     }
-                    
+
                 }
             }
 

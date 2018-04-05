@@ -1,6 +1,5 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
-using System.Text;
 using System.Xml;
 
 namespace TVRename
@@ -9,9 +8,9 @@ namespace TVRename
     {
         public UpcomingRSS(TVDoc i) : base(i) { }
         public override bool Active() =>TVSettings.Instance.ExportWTWRSS;
-        public override string Location() => TVSettings.Instance.ExportWTWRSSTo;
+        protected override string Location() => TVSettings.Instance.ExportWTWRSSTo;
 
-        protected override bool generate(System.IO.Stream str, List<ProcessedEpisode> elist)
+        protected override bool Generate(System.IO.Stream str, List<ProcessedEpisode> elist)
         {
             if (elist == null)
                 return false;
@@ -36,13 +35,13 @@ namespace TVRename
 
                     foreach (ProcessedEpisode ei in elist)
                     {
-                        string niceName = TVSettings.Instance.NamingStyle.NameForExt(ei, null, 0);
+                        string niceName = TVSettings.Instance.NamingStyle.NameForExt(ei);
 
                         writer.WriteStartElement("item");
                         
-                        XMLHelper.WriteElementToXML(writer,"title",ei.HowLong() + " " + ei.DayOfWeek() + " " + ei.TimeOfDay() + " " + niceName);
+                        XMLHelper.WriteElementToXML(writer,"title",ei.HowLong() + " " + ei.DayOfWeek() + " " + ei.TimeOfDay() + " " + ei.SI.ShowName + " " + niceName);
                         XMLHelper.WriteElementToXML(writer, "link", TheTVDB.Instance.WebsiteURL(ei.TheSeries.TVDBCode, ei.SeasonID, false));
-                        XMLHelper.WriteElementToXML(writer,"description",niceName + "<br/>" + ei.Overview);
+                        XMLHelper.WriteElementToXML(writer,"description", ei.SI.ShowName + "<br/>" + niceName + "<br/>" + ei.Overview);
 
                         writer.WriteStartElement("pubDate");
                         DateTime? dt = ei.GetAirDateDT(true);
@@ -55,13 +54,12 @@ namespace TVRename
                     writer.WriteEndElement(); //channel
                     writer.WriteEndElement(); //rss
                     writer.WriteEndDocument();
-                    writer.Close();
                 }
                 return true;
             } // try
             catch (Exception e)
             {
-                logger.Error(e);
+                Logger.Error(e);
                 return false;
             }
 

@@ -1,5 +1,5 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
-<Project ToolsVersion="4.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+<Project ToolsVersion="12.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
@@ -10,7 +10,7 @@
     <AppDesignerFolder>Properties</AppDesignerFolder>
     <RootNamespace>TVRename</RootNamespace>
     <AssemblyName>TVRename</AssemblyName>
-    <TargetFrameworkVersion>v4.0</TargetFrameworkVersion>
+    <TargetFrameworkVersion>v4.6</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <ApplicationIcon>App\app.ico</ApplicationIcon>
     <FileUpgradeFlags>
@@ -44,6 +44,7 @@
     <WarningLevel>0</WarningLevel>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <PlatformTarget>x86</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
     <DebugType>pdbonly</DebugType>
@@ -54,6 +55,7 @@
     <WarningLevel>4</WarningLevel>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <PlatformTarget>AnyCPU</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
   </PropertyGroup>
   <PropertyGroup>
     <StartupObject>TVRename.App.Program</StartupObject>
@@ -64,6 +66,15 @@
       <Private>True</Private>
     </Reference>
     <Reference Include="Microsoft.VisualBasic" />
+    <Reference Include="Microsoft.WindowsAPICodePack, Version=1.1.0.0, Culture=neutral, processorArchitecture=MSIL">
+      <HintPath>..\packages\Microsoft.WindowsAPICodePack-Core.1.1.0.2\lib\Microsoft.WindowsAPICodePack.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.WindowsAPICodePack.Shell, Version=1.1.0.0, Culture=neutral, processorArchitecture=MSIL">
+      <HintPath>..\packages\Microsoft.WindowsAPICodePack-Shell.1.1.0.0\lib\Microsoft.WindowsAPICodePack.Shell.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.WindowsAPICodePack.ShellExtensions, Version=1.1.0.0, Culture=neutral, processorArchitecture=MSIL">
+      <HintPath>..\packages\Microsoft.WindowsAPICodePack-Shell.1.1.0.0\lib\Microsoft.WindowsAPICodePack.ShellExtensions.dll</HintPath>
+    </Reference>
     <Reference Include="Newtonsoft.Json, Version=10.0.0.0, Culture=neutral, PublicKeyToken=30ad4fe6b2a6aeed, processorArchitecture=MSIL">
       <HintPath>..\packages\Newtonsoft.Json.10.0.3\lib\net40\Newtonsoft.Json.dll</HintPath>
       <Private>True</Private>
@@ -88,6 +99,25 @@
     <Compile Include="App\ApplicationBase.cs" />
     <Compile Include="App\CommandLineArgs.cs" />
     <Compile Include="App\AutoFolderMonitor.cs" />
+    <Compile Include="DownloadIdentifers\IncorrectFileDates.cs" />
+    <Compile Include="Forms\AutoAddShow.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Forms\AutoAddShow.Designer.cs">
+      <DependentUpon>AutoAddShow.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Forms\DupEpFinder.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Forms\DupEpFinder.Designer.cs">
+      <DependentUpon>DupEpFinder.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Forms\UpdateNotification.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Forms\UpdateNotification.Designer.cs">
+      <DependentUpon>UpdateNotification.cs</DependentUpon>
+    </Compile>
     <Compile Include="Ipc\IRemoteActions.cs" />
     <Compile Include="Ipc\RemoteClient.cs" />
     <Compile Include="Custom Controls\ListViewFlickerFree.cs">
@@ -122,6 +152,12 @@
     <Compile Include="Forms\Filters.Designer.cs">
       <DependentUpon>Filters.cs</DependentUpon>
     </Compile>
+    <Compile Include="Forms\ShowSummary.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Forms\ShowSummary.Designer.cs">
+      <DependentUpon>ShowSummary.cs</DependentUpon>
+    </Compile>
     <Compile Include="Forms\TVRenameSplash.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -130,9 +166,10 @@
     </Compile>
     <Compile Include="ItemsAndActions\ActionDelete.cs" />
     <Compile Include="ItemsAndActions\ActionMede8erViewXML.cs" />
-    <Compile Include="ItemsAndActions\ActionWriteMetadata.cs" />
     <Compile Include="ItemsAndActions\ActionMede8erXML.cs" />
+    <Compile Include="ItemsAndActions\ActionDateTouch.cs" />
     <Compile Include="Settings\ShowFilter.cs" />
+    <Compile Include="Utility\PossibleDuplicateEpisode.cs" />
     <Compile Include="Utility\DirFilesCache.cs" />
     <Compile Include="Forms\ActorsGrid.cs">
       <SubType>Form</SubType>
@@ -235,7 +272,7 @@
     <Compile Include="TheTVDB\Season.cs" />
     <Compile Include="TheTVDB\SeriesInfo.cs" />
     <Compile Include="ItemsAndActions\ActionCopyMoveRename.cs" />
-    <Compile Include="ItemsAndActions\ActionDownload.cs" />
+    <Compile Include="ItemsAndActions\ActionDownloadImage.cs" />
     <Compile Include="ItemsAndActions\ActionItem.cs" />
     <Compile Include="ItemsAndActions\ItemMissing.cs" />
     <Compile Include="ItemsAndActions\ActionNFO.cs" />
@@ -314,6 +351,9 @@
       <DependentUpon>AddModifyRule.cs</DependentUpon>
       <SubType>Designer</SubType>
     </EmbeddedResource>
+    <EmbeddedResource Include="Forms\AutoAddShow.resx">
+      <DependentUpon>AutoAddShow.cs</DependentUpon>
+    </EmbeddedResource>
     <EmbeddedResource Include="Forms\BugReport.resx">
       <DependentUpon>BugReport.cs</DependentUpon>
       <SubType>Designer</SubType>
@@ -356,6 +396,12 @@
     <EmbeddedResource Include="Forms\FolderMonitorProgress.resx">
       <DependentUpon>FolderMonitorProgress.cs</DependentUpon>
       <SubType>Designer</SubType>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Forms\DupEpFinder.resx">
+      <DependentUpon>DupEpFinder.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Forms\UpdateNotification.resx">
+      <DependentUpon>UpdateNotification.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Forms\IgnoreEdit.resx">
       <DependentUpon>IgnoreEdit.cs</DependentUpon>

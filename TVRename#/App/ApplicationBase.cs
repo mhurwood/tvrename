@@ -12,7 +12,7 @@ namespace TVRename.App
     /// <seealso cref="WindowsFormsApplicationBase" />
     internal class ApplicationBase : WindowsFormsApplicationBase
     {
-        private static readonly NLog.Logger Logger = NLog.LogManager.GetCurrentClassLogger();
+        private static readonly NLog.Logger logger = NLog.LogManager.GetCurrentClassLogger();
 
         /// <summary>
         /// Initializes the splash screen.
@@ -20,6 +20,10 @@ namespace TVRename.App
         protected override void OnCreateSplashScreen()
         {
             this.SplashScreen = new TVRenameSplash();
+
+            CommandLineArgs clargs = new CommandLineArgs(this.CommandLineArgs);
+            if ((clargs.Unattended) || (clargs.Hide)) this.SplashScreen.Visible  = false;
+                
         }
 
         /// <summary>
@@ -28,13 +32,17 @@ namespace TVRename.App
         /// </summary>
         protected override void OnCreateMainForm()
         {
+            CommandLineArgs clargs = new CommandLineArgs(this.CommandLineArgs);
+            if ((clargs.Unattended) || (clargs.Hide))
+                this.SplashScreen.SafeInvoke(
+                    () => ((TVRenameSplash)this.SplashScreen).Visible = false,true);
+
             // Update splash screen
-            this.SplashScreen.Invoke(new MethodInvoker(() => ((TVRenameSplash)this.SplashScreen).UpdateStatus("Initializing")));
+            this.SplashScreen.SafeInvoke(
+                () => ((TVRenameSplash) this.SplashScreen).UpdateStatus("Initializing"), true);
 
             // Update RegVersion to bring the WebBrowser up to speed
             RegistryHelper.UpdateBrowserEmulationVersion();
-
-            CommandLineArgs clargs = new CommandLineArgs(this.CommandLineArgs);
 
             bool recover = false;
             string recoverText = string.Empty;
@@ -57,7 +65,7 @@ namespace TVRename.App
                 {
                     if (!clargs.Unattended && !clargs.Hide) MessageBox.Show($"Error while setting the User-Defined File Path:{Environment.NewLine}{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
 
-                    Logger.Error(ex, $"Error while setting the User-Defined File Path - EXITING: {clargs.UserFilePath}");
+                    logger.Error(ex, $"Error while setting the User-Defined File Path - EXITING: {clargs.UserFilePath}");
 
                     Environment.Exit(1);
                 }
@@ -86,7 +94,7 @@ namespace TVRename.App
                 }
 
                 // Try loading TheTVDB cache file
-                TheTVDB.Instance.setup(tvdbFile, PathManager.TVDBFile, clargs);
+                TheTVDB.Instance.Setup(tvdbFile, PathManager.TVDBFile, clargs);
 
                 // Try loading settings file
                 doc = new TVDoc(settingsFile, clargs);
@@ -103,13 +111,36 @@ namespace TVRename.App
                 if (!TheTVDB.Instance.LoadOK && !string.IsNullOrEmpty(TheTVDB.Instance.LoadErr)) recoverText += $"{Environment.NewLine}{TheTVDB.Instance.LoadErr}";
             } while (recover);
 
+            ConvertSeriesTimeZones(doc, TheTVDB.Instance);
+
             // Show user interface
-            UI ui = new UI(doc, (TVRenameSplash)this.SplashScreen);
+            UI ui = new UI(doc, (TVRenameSplash)this.SplashScreen, !clargs.Unattended && !clargs.Hide);
 
             // Bind IPC actions to the form, this allows another instance to trigger form actions
             RemoteClient.Bind(ui, doc);
 
             this.MainForm = ui;
+        }
+
+        private static void ConvertSeriesTimeZones(TVDoc doc, TheTVDB tvdb)
+        {
+            //this is just to convert timezones in the TheTVDB into the TVDOC where they should be:
+            //itshould only do anything the first time it is run and then be entirely begign
+            //can be removed after 1/1/19
+
+            foreach (ShowItem si in doc.ShowItems)
+            {
+                string newTimeZone = tvdb.GetSeries(si.TVDBCode)?.tempTimeZone;
+
+                if (string.IsNullOrWhiteSpace(newTimeZone)) continue;
+                if ( newTimeZone == TimeZone.DefaultTimeZone() ) continue;
+                if (si.ShowTimeZone != TimeZone.DefaultTimeZone()) continue;
+
+                si.ShowTimeZone = newTimeZone;
+                doc.SetDirty();
+                logger.Info("Copied timezone:{0} onto series {1}", newTimeZone, si.ShowName);
+            }
+
         }
     }
 }

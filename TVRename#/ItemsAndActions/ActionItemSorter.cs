@@ -1,9 +1,9 @@
-﻿// 
+// 
 // Main website for TVRename is http://tvrename.com
 // 
-// Source code available at http://code.google.com/p/tvrename/
+// Source code available at https://github.com/TV-Rename/tvrename
 // 
-// This code is released under GPLv3 http://www.gnu.org/licenses/gpl.html
+// This code is released under GPLv3 https://github.com/TV-Rename/tvrename/blob/master/LICENSE.md
 // 
 namespace TVRename
 {
@@ -26,7 +26,7 @@ namespace TVRename
                 return 2;
             if (a is ActionRSS)
                 return 3;
-            if (a is ActionDownload)
+            if (a is ActionDownloadImage)
                 return 4;
             if (a is ActionNFO)
                 return 5;

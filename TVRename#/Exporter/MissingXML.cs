@@ -1,6 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
+using System;
 using System.Xml;
 
 namespace TVRename
@@ -8,7 +6,7 @@ namespace TVRename
     class MissingXML : MissingExporter
     {
         public override bool Active() =>TVSettings.Instance.ExportMissingXML;
-        public override string Location() =>TVSettings.Instance.ExportMissingXMLTo;
+        protected override string Location() =>TVSettings.Instance.ExportMissingXMLTo;
         
         public override void Run(ItemList TheActionList)
         {
@@ -35,8 +33,8 @@ namespace TVRename
 
                             XMLHelper.WriteElementToXML(writer,"id",Missing.Episode.SI.TVDBCode);
                             XMLHelper.WriteElementToXML(writer, "title",Missing.Episode.TheSeries.Name);
-                            XMLHelper.WriteElementToXML(writer, "season", Helpers.pad(Missing.Episode.SeasonNumber));
-                            XMLHelper.WriteElementToXML(writer, "episode", Helpers.pad(Missing.Episode.EpNum));
+                            XMLHelper.WriteElementToXML(writer, "season", Helpers.pad(Missing.Episode.AppropriateSeasonNumber));
+                            XMLHelper.WriteElementToXML(writer, "episode", Helpers.pad(Missing.Episode.AppropriateEpNum));
                             XMLHelper.WriteElementToXML(writer, "episodeName",Missing.Episode.Name);
                             XMLHelper.WriteElementToXML(writer, "description",Missing.Episode.Overview);
 
@@ -53,7 +51,6 @@ namespace TVRename
                     writer.WriteEndElement(); // MissingItems
                     writer.WriteEndElement(); // tvrename
                     writer.WriteEndDocument();
-                    writer.Close();
                 }
             }
         }

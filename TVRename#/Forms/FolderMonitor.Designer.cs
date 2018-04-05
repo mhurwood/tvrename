@@ -1,9 +1,9 @@
-﻿//
+//
 // Main website for TVRename is http://tvrename.com
 //
-// Source code available at http://code.google.com/p/tvrename/
+// Source code available at https://github.com/TV-Rename/tvrename
 //
-// This code is released under GPLv3 http://www.gnu.org/licenses/gpl.html
+// This code is released under GPLv3 https://github.com/TV-Rename/tvrename/blob/master/LICENSE.md
 //
 
 
@@ -471,7 +471,7 @@ namespace TVRename
             this.Icon = ((System.Drawing.Icon)(resources.GetObject("$this.Icon")));
             this.Name = "FolderMonitor";
             this.ShowInTaskbar = false;
-            this.Text = "Folder Monitor";
+            this.Text = "Bulk Add Shows";
             this.tabControl1.ResumeLayout(false);
             this.tbFolders.ResumeLayout(false);
             this.tbFolders.PerformLayout();

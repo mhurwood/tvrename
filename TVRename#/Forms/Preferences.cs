@@ -1,19 +1,16 @@
 // 
 // Main website for TVRename is http://tvrename.com
 // 
-// Source code available at http://code.google.com/p/tvrename/
+// Source code available at https://github.com/TV-Rename/tvrename
 // 
-// This code is released under GPLv3 http://www.gnu.org/licenses/gpl.html
+// This code is released under GPLv3 https://github.com/TV-Rename/tvrename/blob/master/LICENSE.md
 // 
 using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Windows.Forms;
 using System.Drawing;
-using FileSystemInfo = Alphaleonis.Win32.Filesystem.FileSystemInfo;
-using Directory = Alphaleonis.Win32.Filesystem.Directory;
 using DirectoryInfo = Alphaleonis.Win32.Filesystem.DirectoryInfo;
-using FileInfo = Alphaleonis.Win32.Filesystem.FileInfo;
 using ColumnHeader = SourceGrid.Cells.ColumnHeader;
 
 namespace TVRename
@@ -34,6 +31,7 @@ namespace TVRename
         private TVDoc mDoc;
         private Thread LoadLanguageThread;
         private String EnterPreferredLanguage; // hold here until background language download task is done
+        private static NLog.Logger logger = NLog.LogManager.GetCurrentClassLogger();
 
         private LoadLanguageDoneDel LoadLanguageDone;
 
@@ -90,6 +88,16 @@ namespace TVRename
                 this.txtOtherExtensions.Focus();
                 return;
             }
+            if (!TVSettings.OKExtensionsString(this.txtKeepTogether.Text))
+            {
+                MessageBox.Show(
+                    "Extensions list must be separated by semicolons, and each extension must start with a dot.",
+                    "Preferences", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                this.tabControl1.SelectedTab = tbFilesAndFolders;
+                this.txtKeepTogether.Focus();
+                return;
+            }
+
             TVSettings S = TVSettings.Instance;
 
             S.Replacements.Clear();
@@ -130,9 +138,14 @@ namespace TVRename
             S.ShowInTaskbar = this.chkShowInTaskbar.Checked;
             S.RenameTxtToSub = this.cbTxtToSub.Checked;
             S.ShowEpisodePictures = this.cbShowEpisodePictures.Checked;
+            S.HideMyShowsSpoilers = this.chkHideMyShowsSpoilers.Checked;
+            S.HideWtWSpoilers = this.chkHideWtWSpoilers.Checked;
             S.AutoSelectShowInMyShows = this.cbAutoSelInMyShows.Checked;
             S.AutoCreateFolders = this.cbAutoCreateFolders.Checked ;  
             S.SpecialsFolderName = this.txtSpecialsFolderName.Text;
+            S.searchSeasonWordsString = this.tbSeasonSearchTerms.Text;
+            S.defaultSeasonWord = this.txtSeasonFolderName.Text;
+            S.keepTogetherExtensionsString = this.txtKeepTogether.Text;
 
             S.ForceLowercaseFilenames = this.cbForceLower.Checked;
             S.IgnoreSamples = this.cbIgnoreSamples.Checked;
@@ -152,13 +165,20 @@ namespace TVRename
             S.pyTivoMetaSubFolder = this.cbMetaSubfolder.Checked;
             S.FolderJpg = this.cbFolderJpg.Checked;
             S.RenameCheck = this.cbRenameCheck.Checked;
+            S.PreventMove = this.chkPreventMove.Checked;
             S.MissingCheck = this.cbMissing.Checked;
+            S.CorrectFileDates = this.cbxUpdateAirDate.Checked;
             S.SearchLocally = this.cbSearchLocally.Checked;
+            S.AutoSearchForDownloadedFiles = this.chkAutoSearchForDownloadedFiles.Checked;
             S.LeaveOriginals = this.cbLeaveOriginals.Checked;
             S.CheckuTorrent = this.cbCheckuTorrent.Checked;
             S.LookForDateInFilename = this.cbLookForAirdate.Checked;
+            S.AutoMergeEpisodes = this.chkAutoMergeEpisodes.Checked;
 
             S.MonitorFolders = this.cbMonitorFolder.Checked;
+            S.runStartupCheck = this.chkScanOnStartup.Checked;
+            S.runPeriodicCheck = this.chkScheduledScan.Checked;
+            S.periodCheckHours = int.Parse(this.domainUpDown1.SelectedItem?.ToString()??"1");
             S.RemoveDownloadDirectoriesFiles = this.cbCleanUpDownloadDir.Checked;
 
             S.EpJPGs = this.cbEpThumbJpg.Checked;
@@ -175,6 +195,11 @@ namespace TVRename
             S.Tidyup.EmptyIgnoreExtensionList = this.txtEmptyIgnoreExtensions.Text;
             S.Tidyup.EmptyMaxSizeCheck = this.cbEmptyMaxSize.Checked;
             int.TryParse(this.txtEmptyMaxSize.Text, out S.Tidyup.EmptyMaxSizeMB);
+
+            S.BulkAddCompareNoVideoFolders = this.cbIgnoreNoVideoFolders.Checked;
+            S.BulkAddIgnoreRecycleBin = this.cbIgnoreRecycleBin.Checked;
+            S.AutoAddIgnoreSuffixes = this.tbIgnoreSuffixes.Text;
+            S.AutoAddMovieTerms = this.tbMovieTerms.Text;
 
             if (this.rbFolderFanArt.Checked)
                 S.FolderJpgIs = TVSettings.FolderJpgIsType.FanArt;
@@ -199,6 +224,26 @@ namespace TVRename
             else
                 S.SelectedKODIType = TVSettings.KODIType.Both;
 
+            if (this.cbMode.Text == "Beta")
+            {
+                S.mode = TVSettings.BetaMode.BetaToo;
+            }
+            else
+            {
+                S.mode = TVSettings.BetaMode.ProductionOnly;
+            }
+
+            if (this.cbKeepTogetherMode.Text == "All but these")
+            {
+                S.keepTogetherMode = TVSettings.KeepTogetherModes.AllBut;
+            } else if (this.cbKeepTogetherMode.Text == "Just")
+
+            {
+                S.keepTogetherMode = TVSettings.KeepTogetherModes.Just;
+            }
+            else
+                S.keepTogetherMode = TVSettings.KeepTogetherModes.All;
+
 
             TheTVDB.Instance.GetLock("Preferences-OK");
             foreach (Language l in TheTVDB.Instance.LanguageList)
@@ -209,10 +254,7 @@ namespace TVRename
                     break;
                 }
             }
-            if (rbWTWScan.Checked)
-                S.WTWDoubleClick = TVSettings.WTWDoubleClickAction.Scan;
-            else
-                S.WTWDoubleClick = TVSettings.WTWDoubleClickAction.Search;
+            S.WTWDoubleClick = this.rbWTWScan.Checked ? TVSettings.WTWDoubleClickAction.Scan : TVSettings.WTWDoubleClickAction.Search;
 
             TheTVDB.Instance.SaveCache();
             TheTVDB.Instance.Unlock("Preferences-OK");
@@ -225,6 +267,20 @@ namespace TVRename
             {
                 S.SampleFileMaxSizeMB = 50;
             }
+
+            try
+            {
+                S.upgradeDirtyPercent = float.Parse(this.tbPercentDirty.Text);
+            }
+            catch
+            {
+                S.upgradeDirtyPercent = 20;
+            }
+            if (S.upgradeDirtyPercent < 1)
+                S.upgradeDirtyPercent = 1;
+            else if (S.upgradeDirtyPercent > 100)
+                S.upgradeDirtyPercent = 100;
+
 
             try
             {
@@ -270,12 +326,10 @@ namespace TVRename
             this.SetupLanguages();
 
             TVSettings S = TVSettings.Instance;
-            int r = 1;
 
             foreach (Replacement R in S.Replacements)
             {
                 this.AddNewReplacementRow(R.This, R.That, R.CaseInsensitive);
-                r++;
             }
 
             this.txtMaxSampleSize.Text = S.SampleFileMaxSizeMB.ToString();
@@ -308,6 +362,8 @@ namespace TVRename
             this.cbNotificationIcon.Checked = S.NotificationAreaIcon;
             this.txtVideoExtensions.Text = S.GetVideoExtensionsString();
             this.txtOtherExtensions.Text = S.GetOtherExtensionsString();
+            this.txtKeepTogether.Text = S.GetKeepTogetherString();
+            this.tbSeasonSearchTerms.Text = S.GetSeasonSearchTermsString();
 
             this.cbKeepTogether.Checked = S.KeepTogether;
             this.cbKeepTogether_CheckedChanged(null, null);
@@ -316,6 +372,8 @@ namespace TVRename
             this.chkShowInTaskbar.Checked = S.ShowInTaskbar;
             this.cbTxtToSub.Checked = S.RenameTxtToSub;
             this.cbShowEpisodePictures.Checked = S.ShowEpisodePictures;
+            this.chkHideMyShowsSpoilers.Checked = S.HideMyShowsSpoilers;
+            this.chkHideWtWSpoilers.Checked = S.HideWtWSpoilers;
             this.cbAutoCreateFolders.Checked = S.AutoCreateFolders; 
             this.cbAutoSelInMyShows.Checked = S.AutoSelectShowInMyShows;
             this.txtSpecialsFolderName.Text = S.SpecialsFolderName;
@@ -328,6 +386,7 @@ namespace TVRename
             this.cbCheckSABnzbd.Checked = S.CheckSABnzbd;
 
             this.txtParallelDownloads.Text = S.ParallelDownloads.ToString();
+            this.tbPercentDirty.Text = S.upgradeDirtyPercent.ToString();
 
             this.cbSearchRSS.Checked = S.SearchRSS;
             this.cbEpTBNs.Checked = S.EpTBNs;
@@ -338,11 +397,18 @@ namespace TVRename
             this.cbMetaSubfolder.Checked = S.pyTivoMetaSubFolder;
             this.cbFolderJpg.Checked = S.FolderJpg;
             this.cbRenameCheck.Checked = S.RenameCheck;
+            this.chkPreventMove.Checked = S.PreventMove;
             this.cbCheckuTorrent.Checked = S.CheckuTorrent;
             this.cbLookForAirdate.Checked = S.LookForDateInFilename;
+            this.chkAutoMergeEpisodes.Checked = S.AutoMergeEpisodes;
             this.cbMonitorFolder.Checked = S.MonitorFolders;
+            this.chkScheduledScan.Checked = S.RunPeriodicCheck();
+            this.chkScanOnStartup.Checked = S.RunOnStartUp();
+            this.domainUpDown1.SelectedItem = S.periodCheckHours;
             this.cbCleanUpDownloadDir.Checked = S.RemoveDownloadDirectoriesFiles;
             this.cbMissing.Checked = S.MissingCheck;
+            this.cbxUpdateAirDate.Checked = S.CorrectFileDates;
+            this.chkAutoSearchForDownloadedFiles.Checked = S.AutoSearchForDownloadedFiles;
             this.cbSearchLocally.Checked = S.SearchLocally;
             this.cbLeaveOriginals.Checked = S.LeaveOriginals;
             this.EnterPreferredLanguage = S.PreferredLanguage;
@@ -352,6 +418,7 @@ namespace TVRename
             this.cbXMLFiles.Checked = S.Mede8erXML;
             this.cbShrinkLarge.Checked = S.ShrinkLargeMede8erImages;
             this.cbFantArtJpg.Checked = S.FanArtJpg;
+
 
 #if DEBUG
             System.Diagnostics.Debug.Assert(S.Tidyup != null);
@@ -364,7 +431,13 @@ namespace TVRename
             this.txtEmptyIgnoreExtensions.Text = S.Tidyup.EmptyIgnoreExtensionList;
             this.cbEmptyMaxSize.Checked = S.Tidyup.EmptyMaxSizeCheck;
             this.txtEmptyMaxSize.Text = S.Tidyup.EmptyMaxSizeMB.ToString();
+            this.txtSeasonFolderName.Text = S.defaultSeasonWord;
 
+            
+            this.cbIgnoreRecycleBin.Checked = S.BulkAddIgnoreRecycleBin;
+            this.cbIgnoreNoVideoFolders.Checked = S.BulkAddCompareNoVideoFolders;
+            this.tbMovieTerms.Text = S.AutoAddMovieTerms;
+            this.tbIgnoreSuffixes.Text = S.AutoAddIgnoreSuffixes;
 
             switch (S.WTWDoubleClick)
             {
@@ -375,6 +448,31 @@ namespace TVRename
                 case TVSettings.WTWDoubleClickAction.Scan:
                     this.rbWTWScan.Checked = true;
                     break;
+            }
+            switch(S.keepTogetherMode)
+            {
+                case TVSettings.KeepTogetherModes.All:
+                default:
+                    this.cbKeepTogetherMode.Text = "All";
+                    break;
+                case TVSettings.KeepTogetherModes.AllBut:
+                    this.cbKeepTogetherMode.Text = "All but these";
+                    break;
+                case TVSettings.KeepTogetherModes.Just:
+                    this.cbKeepTogetherMode.Text = "Just";
+                    break;
+            }
+
+            switch (S.mode)
+            {
+                case TVSettings.BetaMode.ProductionOnly:
+                default:
+                    this.cbMode.Text = "Production";
+                    break;
+                case TVSettings.BetaMode.BetaToo:
+                    this.cbMode.Text = "Beta";
+                    break;
+
             }
 
             this.EnableDisable(null, null);
@@ -433,11 +531,13 @@ namespace TVRename
                     System.Collections.Generic.KeyValuePair<ShowStatusColoringType, Color> showStatusColor in
                         S.ShowStatusColors)
                 {
-                    ListViewItem item = new ListViewItem();
-                    item.Text = showStatusColor.Key.Text;
-                    item.Tag = showStatusColor.Key;
+                    ListViewItem item = new ListViewItem
+                    {
+                        Text = showStatusColor.Key.Text,
+                        Tag = showStatusColor.Key,
+                        ForeColor = showStatusColor.Value
+                    };
                     item.SubItems.Add(TranslateColorToHtml(showStatusColor.Value));
-                    item.ForeColor = showStatusColor.Value;
                     this.lvwDefinedColors.Items.Add(item);
                 }
             }
@@ -527,6 +627,9 @@ namespace TVRename
         private void cbKeepTogether_CheckedChanged(object sender, System.EventArgs e)
         {
             this.cbTxtToSub.Enabled = this.cbKeepTogether.Checked;
+            this.txtKeepTogether.Enabled = (this.cbKeepTogether.Checked && this.cbKeepTogetherMode.Text != "All");
+            this.cbKeepTogetherMode.Enabled = this.cbKeepTogether.Checked;
+            this.label39.Enabled = this.cbKeepTogether.Checked;
         }
 
         private void bnBrowseMissingCSV_Click(object sender, System.EventArgs e)
@@ -659,9 +762,8 @@ namespace TVRename
         private void lbSearchFolders_DragDrop(object sender, System.Windows.Forms.DragEventArgs e)
         {
             string[] files = (string[]) (e.Data.GetData(DataFormats.FileDrop));
-            for (int i = 0; i < files.Length; i++)
+            foreach (string path in files)
             {
-                string path = files[i];
                 try
                 {
                     DirectoryInfo di = new DirectoryInfo(path);
@@ -844,6 +946,11 @@ namespace TVRename
             }
             catch (ThreadAbortException)
             {
+                aborted = true;
+            }
+            catch (Exception e)
+            {
+                logger.Fatal(e,"Unhandled Exception in LoadLanguages");
                 aborted = true;
             }
             TheTVDB.Instance.Unlock("Preferences-LoadLanguages");
@@ -1130,6 +1237,17 @@ namespace TVRename
         {
             Point pt = this.PointToScreen(bnMCPresets.Location);
             cmDefaults.Show(pt);
+        }
+
+        private void cbKeepTogetherMode_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            this.txtKeepTogether.Enabled = (this.cbKeepTogether.Checked && this.cbKeepTogetherMode.Text != "All");
+        }
+
+        private void domainUpDown1_KeyDown(object sender, KeyEventArgs e)
+        {
+                e.SuppressKeyPress = true;
+            
         }
 
     }
