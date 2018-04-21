@@ -44,8 +44,12 @@ namespace TVRename
 
             this.txtShowName.Text = si.ShowName;
             this.txtSeasonNumber.Text = seasonNumber.ToString();
+            this.bnPreview.Tag = true;
 
             this.FillRuleList(false, 0);
+
+            foreach (ProcessedEpisode pe in originalEpList)
+                this.lbEpsOriginal.Items.Add(this.NameStyle.NameForExt(pe, null, 0));
         }
 
         private void bnAddRule_Click(object sender, System.EventArgs e)
@@ -73,10 +77,11 @@ namespace TVRename
             foreach (ShowRule sr in this.WorkingRuleSet)
             {
                 ListViewItem lvi = new ListViewItem();
-                lvi.Text = sr.ActionInWords();
+                lvi.Text = (this.lvRuleList.Items.Count + 1).ToString();
+                lvi.SubItems.Add(sr.ActionInWords());
                 lvi.SubItems.Add(sr.First == -1 ? "" : sr.First.ToString());
                 lvi.SubItems.Add(sr.Second == -1 ? "" : sr.Second.ToString());
-                lvi.SubItems.Add(sr.UserSuppliedText);
+                lvi.SubItems.Add(sr.PlainEnglishDescription());
                 lvi.Tag = sr;
                 this.lvRuleList.Items.Add(lvi);
             }
@@ -162,23 +167,87 @@ namespace TVRename
             this.Close();
         }
 
-        private void FillPreview()
+        private void FillPreview(int StopAfter = 0)
         {
             List<ProcessedEpisode> pel = new List<ProcessedEpisode>();
+            this.txtPreviewLabel.Text = StopAfter == 0
+                ? "Processed List Preview :"
+                : string.Format("Processed List Preview (Rules 1 to {0}):", StopAfter);
 
             if (this.mOriginalEps != null)
             {
                 foreach (ProcessedEpisode pe in this.mOriginalEps)
                     pel.Add(new ProcessedEpisode(pe));
 
-                TVDoc.ApplyRules(pel, this.WorkingRuleSet, this.mSI);
+                if (StopAfter == 0)
+                    StopAfter = this.WorkingRuleSet.Count;
+                TVDoc.ApplyRules(pel, this.WorkingRuleSet.GetRange(0, StopAfter), this.mSI);
             }
 
             this.lbEpsPreview.BeginUpdate();
             this.lbEpsPreview.Items.Clear();
             foreach (ProcessedEpisode pe in pel)
-                this.lbEpsPreview.Items.Add(this.NameStyle.NameForExt(pe));
+                this.lbEpsPreview.Items.Add(new PreviewListItem(pe, NameStyle));
             this.lbEpsPreview.EndUpdate();
+        }
+
+        private void lbEpsPreview_DoubleClick(object sender, System.EventArgs e)
+        {
+            ShowRule sr = new ShowRule();
+            if (lbEpsPreview.SelectedItem != null)
+                sr.First = ((PreviewListItem)lbEpsPreview.SelectedItem).EpNumber();
+            AddModifyRule ar = new AddModifyRule(sr, this.mSI.GetSeason(this.mSeasonNumber), this.mSI.DVDOrder);
+
+            if (ar.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+                this.WorkingRuleSet.Add(sr);
+
+            this.FillRuleList(false, 0);
+        }
+
+        private void EditRules_SizeChanged(object sender, System.EventArgs e)
+        {
+            lvRuleList.Columns[4].Width = lvRuleList.Width - lvRuleList.Columns[0].Width -
+                                          lvRuleList.Columns[1].Width - lvRuleList.Columns[2].Width -
+                                          lvRuleList.Columns[3].Width - SystemInformation.VerticalScrollBarWidth -
+                                          lvRuleList.Columns.Count;
+        }
+
+        private void bnPreview_Click(object sender, System.EventArgs e)
+        {
+            if (!(bool)bnPreview.Tag)
+            {
+                bnPreview.Text = "Preview to...";
+                bnPreview.Tag = true;
+                this.FillPreview();
+            }
+            else if (lvRuleList.SelectedIndices.Count > 0)
+            {
+                bnPreview.Text = "Preview All";
+                bnPreview.Tag = false;
+                this.FillPreview(lvRuleList.SelectedIndices[0] + 1);
+            }
+        }
+
+        private class PreviewListItem
+        {
+            private ProcessedEpisode pe;
+            private CustomName nameStyle;
+
+            public PreviewListItem(ProcessedEpisode PE, CustomName NameStyle)
+            {
+                this.pe = PE;
+                this.nameStyle = NameStyle;
+            }
+
+            public override string ToString()
+            {
+                return this.nameStyle.NameForExt(this.pe, null, 0);
+            }
+
+            public int EpNumber()
+            {
+                return this.pe.EpNum2;
+            }
         }
     }
 }

@@ -212,7 +212,7 @@ namespace TVRename
             }
 
             //validation Rules
-            if (!this.mSeason.ContainsEpisode(int.Parse(this.txtValue1.Text), this.mdvdOrder))
+            if (!this.mSeason.ContainsEpisode(this.mRule.First, this.mdvdOrder))
             {
                 MessageBox.Show("First episode number is not valid for the selected season", "Modify Rules",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -223,7 +223,7 @@ namespace TVRename
 
             //these 3 tpyes only have one episode cited
             if (!(this.mRule.DoWhatNow == RuleAction.kRename || this.mRule.DoWhatNow == RuleAction.kInsert || this.mRule.DoWhatNow == RuleAction.kSplit) &&
-                !this.mSeason.ContainsEpisode(int.Parse(this.txtValue2.Text), this.mdvdOrder))
+                !this.mSeason.ContainsEpisode(this.mRule.Second, this.mdvdOrder))
             {
                 MessageBox.Show("Second episode number is not valid for the selected season", "Modify Rules",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -234,7 +234,7 @@ namespace TVRename
 
             //these 3 tpyes only have one episode cited - others must be in order
             if (!(this.mRule.DoWhatNow == RuleAction.kRename || this.mRule.DoWhatNow == RuleAction.kInsert || this.mRule.DoWhatNow == RuleAction.kSplit) &&
-                int.Parse(this.txtValue2.Text) < int.Parse(this.txtValue1.Text))
+                this.mRule.Second < this.mRule.First)
             {
                 MessageBox.Show("Second episode number must be before the first episode number", "Modify Rules",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
